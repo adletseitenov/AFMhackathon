@@ -1,12 +1,502 @@
 <!doctype html>
 <html lang="ru">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>КӨЗ — AI Media Watch</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>КӨЗ · Media Watch — аналитическая консоль АФМ</title>
+
+  <!-- Geist + Geist Mono via fontsource CDN; system stack falls back offline -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/geist-sans@5/400.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/geist-sans@5/500.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/geist-sans@5/600.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/geist-mono@5/400.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/geist-mono@5/500.css" />
+
+  <!-- Phosphor icons -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css" />
+
+  <!-- Tailwind Play CDN + inline theme -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Geist Sans"', 'system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', 'sans-serif'],
+            mono: ['"Geist Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'Consolas', 'monospace'],
+          },
+          colors: {
+            canvas: '#FBFBFA',
+            surface: '#FFFFFF',
+            ink: '#111111',
+            muted: '#787774',
+            line: '#EAEAEA',
+          },
+          borderRadius: { card: '12px', soft: '8px' },
+          boxShadow: { diffuse: '0 1px 2px rgba(0,0,0,0.03), 0 6px 24px rgba(0,0,0,0.03)' },
+        },
+      },
+    };
+  </script>
+
+  <!-- Chart.js + vis-network (graph) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/vis-network@9.1.9/styles/vis-network.min.css" />
+  <script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+
+  <link rel="stylesheet" href="/styles.css" />
+  <!-- app.js defines window.kozApp; it MUST run before Alpine boots.
+       Both are deferred -> execute in document order, so app.js precedes Alpine. -->
+  <script defer src="/app.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
 </head>
-<body>
-  <h1>КӨЗ — мониторинг соцсетей</h1>
-  <p>Аналитическая консоль АФМ загружается…</p>
+
+<body class="bg-canvas text-ink font-sans antialiased min-h-screen" x-data="kozApp()" x-init="init()" x-cloak>
+
+  <!-- ===================== Top bar ===================== -->
+  <header class="sticky top-0 z-30 bg-surface/90 backdrop-blur border-b border-line">
+    <div class="mx-auto max-w-[1500px] px-6 h-14 flex items-center gap-6">
+      <div class="flex items-center gap-2.5">
+        <span class="grid place-items-center w-7 h-7 rounded-soft border border-line text-ink">
+          <i class="ph ph-eye text-[18px]"></i>
+        </span>
+        <div class="leading-tight">
+          <div class="font-semibold tracking-tight text-[15px]">КӨЗ <span class="text-muted font-normal">· Media Watch</span></div>
+          <div class="text-[11px] text-muted -mt-0.5">мониторинг соцсетей · АФМ</div>
+        </div>
+      </div>
+
+      <!-- tab nav -->
+      <nav class="flex items-center gap-1 ml-2">
+        <template x-for="t in tabs" :key="t.id">
+          <button @click="setTab(t.id)"
+                  class="px-3 py-1.5 rounded-soft text-[13px] transition-colors"
+                  :class="tab === t.id ? 'bg-ink text-white' : 'text-muted hover:text-ink hover:bg-canvas'">
+            <i :class="'ph ' + t.icon + ' text-[15px] align-[-2px] mr-1'"></i><span x-text="t.label"></span>
+          </button>
+        </template>
+      </nav>
+
+      <div class="ml-auto flex items-center gap-5 text-[12px]">
+        <div class="flex items-center gap-2" title="Качество собственной модели на отложенной выборке">
+          <span class="text-muted">macro-F1 модели</span>
+          <span class="font-mono font-medium px-2 py-0.5 rounded-full bg-canvas border border-line"
+                x-text="macroF1 === null ? '—' : macroF1.toFixed(2)"></span>
+        </div>
+        <div class="h-4 w-px bg-line"></div>
+        <div class="flex items-center gap-2">
+          <span class="text-muted">в очереди</span>
+          <span class="font-mono font-medium" x-text="feed.length"></span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="mx-auto max-w-[1500px] px-6 py-5">
+
+    <!-- ============================================================= -->
+    <!-- View 1: ЛЕНТА / ОЧЕРЕДЬ                                        -->
+    <!-- ============================================================= -->
+    <section x-show="tab === 'feed'" class="grid grid-cols-12 gap-5">
+
+      <!-- Left: priority queue -->
+      <div class="col-span-12 lg:col-span-5 xl:col-span-4">
+        <div class="flex items-center gap-3 mb-3">
+          <h2 class="text-[13px] font-semibold uppercase tracking-wide text-muted">Приоритетная очередь</h2>
+          <select x-model="categoryFilter" @change="loadFeed()"
+                  class="ml-auto bg-surface border border-line rounded-soft text-[12px] px-2 py-1 outline-none focus:border-muted">
+            <option value="">все категории</option>
+            <option value="gambling">гемблинг</option>
+            <option value="pyramid">финпирамида</option>
+            <option value="fraud">мошенничество</option>
+            <option value="clean">чисто</option>
+          </select>
+          <button @click="tick()" :disabled="ticking"
+                  class="press inline-flex items-center gap-1.5 px-2.5 py-1 rounded-soft border border-line bg-surface text-[12px] text-ink hover:bg-canvas disabled:opacity-50">
+            <i class="ph ph-plus text-[14px]"></i><span x-text="ticking ? '…' : 'Тик'"></span>
+          </button>
+        </div>
+
+        <!-- error -->
+        <template x-if="feedError">
+          <div class="rounded-soft border border-[#F3D5D5] bg-[#FDEBEC] text-[#9F2F2D] text-[12px] px-3 py-2 mb-3" x-text="feedError"></div>
+        </template>
+
+        <!-- skeletons -->
+        <template x-if="feedLoading && !feed.length">
+          <div class="space-y-2.5">
+            <template x-for="i in 5" :key="i">
+              <div class="rounded-card border border-line bg-surface p-3.5">
+                <div class="flex items-center justify-between">
+                  <div class="h-5 w-12 rounded-full skeleton"></div>
+                  <div class="h-3 w-14 rounded skeleton"></div>
+                </div>
+                <div class="h-3 w-24 rounded skeleton mt-2.5"></div>
+                <div class="h-3.5 w-full rounded skeleton mt-2"></div>
+              </div>
+            </template>
+          </div>
+        </template>
+
+        <!-- empty -->
+        <template x-if="!feedLoading && !feed.length && !feedError">
+          <div class="rounded-card border border-dashed border-line bg-surface p-8 text-center">
+            <i class="ph ph-queue text-[26px] text-muted"></i>
+            <p class="text-[13px] text-ink mt-2 font-medium">Очередь пуста</p>
+            <p class="text-[12px] text-muted mt-1">Нажмите «Тик», чтобы подгрузить поток постов.</p>
+          </div>
+        </template>
+
+        <!-- cards -->
+        <div class="space-y-2.5 max-h-[calc(100vh-180px)] overflow-y-auto pr-0.5">
+          <template x-for="row in feed" :key="row.post.id">
+            <article @click="openPost(row.post.id)"
+                     class="reveal press group cursor-pointer rounded-card border bg-surface p-3.5 transition-colors"
+                     :class="row.post.id === selectedId ? 'border-ink' : 'border-line hover:border-muted'"
+                     :data-new="isNew(row.post.id)">
+              <div class="flex items-center justify-between">
+                <span class="font-mono text-[15px] font-medium px-2 py-0.5 rounded-md" :style="riskBadge(row.score.risk)"
+                      x-text="row.score.risk"></span>
+                <div class="flex items-center gap-1.5 text-[11px] text-muted">
+                  <span x-show="isNew(row.post.id)" class="pulse-dot w-1.5 h-1.5 rounded-full bg-[#956400]"></span>
+                  <i :class="'ph ' + platformIcon(row.post.platform) + ' text-[14px]'"></i>
+                  <span x-text="row.post.platform"></span>
+                </div>
+              </div>
+              <div class="mt-2 text-[12px] font-mono text-muted truncate" x-text="row.post.author_handle"></div>
+              <p class="text-[13px] leading-snug mt-1 line-clamp-2" x-text="row.post.caption || '—'"></p>
+              <div class="mt-2.5 flex flex-wrap items-center gap-1.5">
+                <span class="badge-chip" :style="riskBadge(row.score.risk)" x-text="actionLabel(row.recommended_action)"></span>
+                <span class="badge-chip bg-canvas text-muted border border-line" x-text="categoryLabel(row.score.category)"></span>
+              </div>
+            </article>
+          </template>
+        </div>
+      </div>
+
+      <!-- Right: drill-down -->
+      <div class="col-span-12 lg:col-span-7 xl:col-span-8">
+        <div class="rounded-card border border-line bg-surface shadow-diffuse min-h-[calc(100vh-160px)] p-6">
+
+          <!-- empty drill state -->
+          <template x-if="!detail && !detailLoading">
+            <div class="h-full grid place-items-center text-center py-24">
+              <div>
+                <i class="ph ph-magnifying-glass text-[30px] text-muted"></i>
+                <p class="text-[14px] font-medium mt-3">Выберите материал из очереди</p>
+                <p class="text-[12px] text-muted mt-1 max-w-sm">Откроется разбор по всем модальностям: транскрипт, текст с экрана, визуальные маркеры, сработавшие паттерны и объяснение модели.</p>
+              </div>
+            </div>
+          </template>
+
+          <!-- drill skeleton -->
+          <template x-if="detailLoading">
+            <div class="space-y-4">
+              <div class="h-6 w-48 skeleton rounded"></div>
+              <div class="h-44 w-full skeleton rounded-card"></div>
+              <div class="h-3 w-full skeleton rounded"></div>
+              <div class="h-3 w-2/3 skeleton rounded"></div>
+            </div>
+          </template>
+
+          <!-- drill content -->
+          <template x-if="detail && !detailLoading">
+            <div class="space-y-5">
+              <!-- header -->
+              <div class="flex items-start justify-between gap-4">
+                <div>
+                  <div class="flex items-center gap-2 text-[12px] text-muted">
+                    <i :class="'ph ' + platformIcon(detail.post.platform) + ' text-[15px]'"></i>
+                    <span x-text="detail.post.platform"></span>
+                    <span>·</span>
+                    <span class="font-mono" x-text="detail.post.author_handle || '—'"></span>
+                  </div>
+                  <h2 class="text-[18px] font-semibold tracking-tight mt-1 leading-snug" x-text="detail.post.caption || 'Без подписи'"></h2>
+                  <a :href="detail.post.url" target="_blank" rel="noopener"
+                     class="text-[12px] text-muted hover:text-ink underline decoration-line underline-offset-2 break-all"
+                     x-text="detail.post.url"></a>
+                </div>
+                <div class="shrink-0 text-right">
+                  <div class="font-mono text-[30px] leading-none font-medium px-3 py-2 rounded-card inline-block" :style="riskBadge(detail.score.risk)" x-text="detail.score.risk"></div>
+                  <div class="text-[11px] text-muted mt-1.5">риск · 0–100</div>
+                </div>
+              </div>
+
+              <!-- recommendation strip -->
+              <div class="flex flex-wrap items-center gap-3 rounded-card border border-line bg-canvas px-4 py-3">
+                <span class="badge-chip" :style="riskBadge(detail.score.risk)" x-text="actionLabel(detail.recommended_action)"></span>
+                <span class="badge-chip bg-surface text-muted border border-line" x-text="categoryLabel(detail.score.category)"></span>
+                <a :href="'/api/report/' + detail.post.id + '.pdf'" target="_blank" rel="noopener"
+                   class="press ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-soft bg-ink text-white text-[12px] hover:opacity-90">
+                  <i class="ph ph-file-pdf text-[15px]"></i> Экспорт дела (PDF)
+                </a>
+              </div>
+
+              <!-- media -->
+              <div class="rounded-card border border-line bg-canvas overflow-hidden">
+                <template x-if="detail.post.media_path">
+                  <video :src="mediaSrc(detail.post.media_path)" controls class="w-full max-h-[340px] bg-black"></video>
+                </template>
+                <template x-if="!detail.post.media_path && detail.post.thumb_url">
+                  <img :src="detail.post.thumb_url" alt="превью" class="w-full max-h-[340px] object-contain bg-black" />
+                </template>
+                <template x-if="!detail.post.media_path && !detail.post.thumb_url">
+                  <div class="aspect-video grid place-items-center text-muted">
+                    <div class="text-center">
+                      <i class="ph ph-monitor-play text-[28px]"></i>
+                      <p class="text-[12px] mt-1.5">Медиа недоступно — разбор по тексту и метаданным</p>
+                    </div>
+                  </div>
+                </template>
+              </div>
+
+              <div class="grid md:grid-cols-2 gap-5">
+                <!-- transcript -->
+                <div>
+                  <h3 class="section-h">Транскрипт <span class="text-muted/70 normal-case font-normal">(триггеры подсвечены)</span></h3>
+                  <p class="evidence" x-html="detail.extracted && detail.extracted.transcript ? highlight(detail.extracted.transcript, detail.score.top_features) : '<span class=&quot;text-muted&quot;>нет аудио-дорожки</span>'"></p>
+                </div>
+                <!-- ocr -->
+                <div>
+                  <h3 class="section-h">Текст с экрана (OCR)</h3>
+                  <p class="evidence" x-html="detail.extracted && detail.extracted.ocr_text ? highlight(detail.extracted.ocr_text, detail.score.top_features) : '<span class=&quot;text-muted&quot;>текст на кадрах не распознан</span>'"></p>
+                </div>
+              </div>
+
+              <!-- visual concepts -->
+              <div x-show="detail.extracted && detail.extracted.visual_concepts && detail.extracted.visual_concepts.length">
+                <h3 class="section-h">Визуальные концепты</h3>
+                <div class="flex flex-wrap gap-1.5">
+                  <template x-for="vc in (detail.extracted ? detail.extracted.visual_concepts : [])" :key="vc.label">
+                    <span class="badge-chip bg-canvas text-ink border border-line normal-case tracking-normal">
+                      <span x-text="vc.label"></span>
+                      <span class="font-mono text-muted ml-1" x-text="Math.round((vc.score||0)*100) + '%'"></span>
+                    </span>
+                  </template>
+                </div>
+              </div>
+
+              <!-- triggered patterns -->
+              <div x-show="detail.score.top_features && detail.score.top_features.length">
+                <h3 class="section-h">Сработавшие паттерны модели</h3>
+                <ul class="space-y-1.5">
+                  <template x-for="f in detail.score.top_features" :key="f.feature">
+                    <li class="flex items-start gap-2 text-[13px]">
+                      <i class="ph ph-target text-[#956400] text-[15px] mt-0.5 shrink-0"></i>
+                      <span><span class="font-medium" x-text="featureLabel(f.feature)"></span><span class="text-muted" x-show="f.evidence" x-text="' — «' + f.evidence + '»'"></span></span>
+                    </li>
+                  </template>
+                </ul>
+              </div>
+
+              <!-- explanation -->
+              <div x-show="detail.explanation && detail.explanation.length">
+                <h3 class="section-h">Почему это опасно</h3>
+                <ul class="space-y-1.5">
+                  <template x-for="line in detail.explanation" :key="line">
+                    <li class="flex items-start gap-2 text-[13px]">
+                      <i class="ph ph-warning-circle text-[#9F2F2D] text-[15px] mt-0.5 shrink-0"></i>
+                      <span x-text="line"></span>
+                    </li>
+                  </template>
+                </ul>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================= -->
+    <!-- View 2: ГРАФ                                                   -->
+    <!-- ============================================================= -->
+    <section x-show="tab === 'graph'" x-cloak>
+      <div class="flex items-center gap-3 mb-3">
+        <h2 class="text-[13px] font-semibold uppercase tracking-wide text-muted">Граф связей</h2>
+        <span class="text-[12px] text-muted">общие сущности (бренды, Telegram-каналы, реквизиты) связывают материалы в кластеры</span>
+        <label class="ml-auto flex items-center gap-2 text-[12px] text-muted">
+          мин. риск
+          <input type="range" min="0" max="100" step="5" x-model.number="graphMinRisk" @change="loadGraph()" class="accent-[#9F2F2D]" />
+          <span class="font-mono w-7 text-ink" x-text="graphMinRisk"></span>
+        </label>
+        <button @click="loadGraph()" class="press inline-flex items-center gap-1.5 px-2.5 py-1 rounded-soft border border-line bg-surface text-[12px] hover:bg-canvas">
+          <i class="ph ph-arrows-clockwise text-[14px]"></i> Обновить
+        </button>
+      </div>
+      <template x-if="graphError">
+        <div class="rounded-soft border border-[#F3D5D5] bg-[#FDEBEC] text-[#9F2F2D] text-[12px] px-3 py-2 mb-3" x-text="graphError"></div>
+      </template>
+      <div class="rounded-card border border-line bg-surface shadow-diffuse overflow-hidden">
+        <div id="graph" class="w-full h-[calc(100vh-220px)]"></div>
+      </div>
+      <div class="flex items-center gap-4 mt-3 text-[11px] text-muted">
+        <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full" style="background:#9F2F2D"></span>эскалация ≥70</span>
+        <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full" style="background:#956400"></span>на проверку 40–69</span>
+        <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full" style="background:#346538"></span>чисто &lt;40</span>
+        <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm" style="background:#C9C9C7"></span>сущность</span>
+        <span class="ml-2">клик по узлу-посту открывает разбор</span>
+      </div>
+    </section>
+
+    <!-- ============================================================= -->
+    <!-- View 3: ТРЕНДЫ                                                 -->
+    <!-- ============================================================= -->
+    <section x-show="tab === 'trends'" x-cloak>
+      <div class="flex items-center gap-3 mb-3">
+        <h2 class="text-[13px] font-semibold uppercase tracking-wide text-muted">Тренды</h2>
+        <span class="text-[12px] text-muted">агрегаты по всем обработанным материалам</span>
+        <span class="ml-auto text-[12px] text-muted">всего постов <span class="font-mono text-ink" x-text="trends ? trends.total_posts : '—'"></span></span>
+      </div>
+      <template x-if="trendsError">
+        <div class="rounded-soft border border-[#F3D5D5] bg-[#FDEBEC] text-[#9F2F2D] text-[12px] px-3 py-2 mb-3" x-text="trendsError"></div>
+      </template>
+      <div class="grid grid-cols-12 gap-5">
+        <div class="col-span-12 lg:col-span-7 chart-card">
+          <h3 class="section-h">Распределение по категориям</h3>
+          <div class="h-64"><canvas id="chartCategory"></canvas></div>
+        </div>
+        <div class="col-span-12 lg:col-span-5 chart-card">
+          <h3 class="section-h">Рекомендованные действия</h3>
+          <div class="h-64"><canvas id="chartAction"></canvas></div>
+        </div>
+        <div class="col-span-12 md:col-span-5 chart-card">
+          <h3 class="section-h">Платформы</h3>
+          <div class="h-64"><canvas id="chartPlatform"></canvas></div>
+        </div>
+        <div class="col-span-12 md:col-span-7 chart-card">
+          <h3 class="section-h">Гистограмма риска</h3>
+          <div class="h-64"><canvas id="chartRisk"></canvas></div>
+        </div>
+        <div class="col-span-12 chart-card">
+          <h3 class="section-h">Топ упоминаемых брендов</h3>
+          <template x-if="!trends || !trends.top_brands || !trends.top_brands.length">
+            <p class="text-[12px] text-muted">Брендов пока не зафиксировано.</p>
+          </template>
+          <div class="space-y-2" x-show="trends && trends.top_brands && trends.top_brands.length">
+            <template x-for="b in (trends ? trends.top_brands : [])" :key="b.brand">
+              <div class="flex items-center gap-3">
+                <span class="text-[13px] w-40 truncate" x-text="b.brand"></span>
+                <div class="flex-1 h-2 rounded-full bg-canvas overflow-hidden">
+                  <div class="h-full rounded-full bg-ink/70" :style="'width:' + brandPct(b.count) + '%'"></div>
+                </div>
+                <span class="font-mono text-[12px] text-muted w-8 text-right" x-text="b.count"></span>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================= -->
+    <!-- View 4: ЖИВАЯ ПРОВЕРКА                                         -->
+    <!-- ============================================================= -->
+    <section x-show="tab === 'live'" x-cloak class="grid grid-cols-12 gap-5">
+      <div class="col-span-12 lg:col-span-5">
+        <div class="rounded-card border border-line bg-surface shadow-diffuse p-6">
+          <h2 class="text-[15px] font-semibold tracking-tight">Живая проверка</h2>
+          <p class="text-[12px] text-muted mt-1">Вставьте ссылку на пост или загрузите видео — модель оценит риск локально, без внешних сервисов.</p>
+
+          <label class="section-h mt-5 block">Ссылка на пост</label>
+          <div class="flex gap-2">
+            <input x-model="liveUrl" @keydown.enter="analyze()" placeholder="https://www.tiktok.com/@.../video/..."
+                   class="flex-1 bg-surface border border-line rounded-soft px-3 py-2 text-[13px] outline-none focus:border-muted" />
+          </div>
+
+          <div class="my-3 flex items-center gap-3 text-[11px] text-muted">
+            <div class="flex-1 h-px bg-line"></div>или<div class="flex-1 h-px bg-line"></div>
+          </div>
+
+          <label class="block">
+            <span class="section-h block">Загрузить файл</span>
+            <input type="file" accept="video/*,image/*" @change="liveFile = $event.target.files[0]; liveUrl=''"
+                   class="block w-full text-[12px] text-muted file:mr-3 file:px-3 file:py-1.5 file:rounded-soft file:border file:border-line file:bg-canvas file:text-ink file:text-[12px] hover:file:bg-line/40 cursor-pointer" />
+          </label>
+          <p x-show="liveFile" class="text-[12px] text-muted mt-1.5 truncate"><i class="ph ph-paperclip"></i> <span x-text="liveFile && liveFile.name"></span></p>
+
+          <button @click="analyze()" :disabled="liveLoading || (!liveUrl && !liveFile)"
+                  class="press w-full mt-5 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-soft bg-ink text-white text-[13px] font-medium hover:opacity-90 disabled:opacity-40">
+            <i class="ph" :class="liveLoading ? 'ph-circle-notch animate-spin' : 'ph-shield-check'"></i>
+            <span x-text="liveLoading ? 'Анализ…' : 'Проверить'"></span>
+          </button>
+          <template x-if="liveError">
+            <div class="rounded-soft border border-[#F3D5D5] bg-[#FDEBEC] text-[#9F2F2D] text-[12px] px-3 py-2 mt-3" x-text="liveError"></div>
+          </template>
+        </div>
+      </div>
+
+      <!-- verdict -->
+      <div class="col-span-12 lg:col-span-7">
+        <template x-if="!liveResult && !liveLoading">
+          <div class="rounded-card border border-dashed border-line bg-surface h-full grid place-items-center py-24 text-center">
+            <div>
+              <i class="ph ph-gauge text-[30px] text-muted"></i>
+              <p class="text-[14px] font-medium mt-3">Вердикт появится здесь</p>
+              <p class="text-[12px] text-muted mt-1">Риск, категория и объяснение по собственной модели.</p>
+            </div>
+          </div>
+        </template>
+        <template x-if="liveLoading">
+          <div class="rounded-card border border-line bg-surface p-6 space-y-4">
+            <div class="h-16 w-32 skeleton rounded-card"></div>
+            <div class="h-3 w-full skeleton rounded"></div>
+            <div class="h-3 w-2/3 skeleton rounded"></div>
+          </div>
+        </template>
+        <template x-if="liveResult && !liveLoading">
+          <div class="rounded-card border border-line bg-surface shadow-diffuse p-6 space-y-5 reveal">
+            <div class="flex items-start justify-between gap-4">
+              <div>
+                <div class="flex items-center gap-2">
+                  <span class="badge-chip" :style="riskBadge(liveResult.score.risk)" x-text="actionLabel(liveResult.recommended_action)"></span>
+                  <span class="badge-chip bg-canvas text-muted border border-line" x-text="categoryLabel(liveResult.score.category)"></span>
+                </div>
+                <h3 class="text-[16px] font-semibold mt-2 leading-snug" x-text="liveResult.post.caption || liveResult.post.url || 'Материал'"></h3>
+                <div class="text-[12px] text-muted mt-0.5 flex items-center gap-1.5">
+                  <i :class="'ph ' + platformIcon(liveResult.post.platform) + ' text-[14px]'"></i>
+                  <span x-text="liveResult.post.platform"></span>
+                </div>
+              </div>
+              <div class="shrink-0 text-right">
+                <div class="font-mono text-[30px] leading-none font-medium px-3 py-2 rounded-card inline-block" :style="riskBadge(liveResult.score.risk)" x-text="liveResult.score.risk"></div>
+                <div class="text-[11px] text-muted mt-1.5">риск</div>
+              </div>
+            </div>
+
+            <div x-show="liveResult.note" class="rounded-soft border border-[#F0E4BE] bg-[#FBF3DB] text-[#956400] text-[12px] px-3 py-2" x-text="liveResult.note"></div>
+
+            <div x-show="liveResult.score.top_features && liveResult.score.top_features.length">
+              <h3 class="section-h">Сработавшие паттерны</h3>
+              <ul class="space-y-1.5">
+                <template x-for="f in liveResult.score.top_features" :key="f.feature">
+                  <li class="flex items-start gap-2 text-[13px]">
+                    <i class="ph ph-target text-[#956400] text-[15px] mt-0.5 shrink-0"></i>
+                    <span><span class="font-medium" x-text="featureLabel(f.feature)"></span><span class="text-muted" x-show="f.evidence" x-text="' — «' + f.evidence + '»'"></span></span>
+                  </li>
+                </template>
+              </ul>
+            </div>
+
+            <div x-show="liveResult.explanation && liveResult.explanation.length">
+              <h3 class="section-h">Почему это опасно</h3>
+              <ul class="space-y-1.5">
+                <template x-for="line in liveResult.explanation" :key="line">
+                  <li class="flex items-start gap-2 text-[13px]">
+                    <i class="ph ph-warning-circle text-[#9F2F2D] text-[15px] mt-0.5 shrink-0"></i>
+                    <span x-text="line"></span>
+                  </li>
+                </template>
+              </ul>
+            </div>
+
+            <a :href="'/api/report/' + liveResult.post.id + '.pdf'" target="_blank" rel="noopener"
+               class="press inline-flex items-center gap-1.5 px-3 py-1.5 rounded-soft border border-line bg-surface text-[12px] hover:bg-canvas">
+              <i class="ph ph-file-pdf text-[15px]"></i> Экспорт дела (PDF)
+            </a>
+          </div>
+        </template>
+      </div>
+    </section>
+
+  </main>
 </body>
 </html>

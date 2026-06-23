@@ -14,7 +14,7 @@ from scripts.gen_dataset import main as gen_main
 
 def test_build_rows_volume_and_schema():
     rows = build_rows()
-    assert 400 <= len(rows) <= 600
+    assert 800 <= len(rows) <= 1100
     for r in rows:
         assert set(r.keys()) == {"text", "lang", "label"}
         assert r["lang"] in {"ru", "kk"}
@@ -53,9 +53,27 @@ def trained_metrics():
 
 
 def test_train_reaches_sanity_macro_f1(trained_metrics):
+    # Пол качества: модель должна уверенно различать классы.
     assert (
-        trained_metrics["macro_f1"] >= 0.7
+        trained_metrics["macro_f1"] >= 0.80
     ), f"macro-F1 слишком низкий: {trained_metrics['macro_f1']}"
+
+
+def test_model_is_credible_not_perfect(trained_metrics):
+    """Criterion #2 (свой, независимый): идеальная диагональ (macro_f1=1.0) неправдоподобна.
+
+    Датасет содержит граничные коллизии (общий текст под двумя соседними ярлыками),
+    поэтому на held-out ДОЛЖНЫ быть off-diagonal ошибки — это признак реалистичной,
+    а не зазубренной модели. Держим разумный потолок и проверяем недиагональность.
+    """
+    cm = trained_metrics["confusion_matrix"]
+    diag = sum(cm[i][i] for i in range(len(cm)))
+    total = sum(sum(row) for row in cm)
+    off_diagonal = total - diag
+    assert off_diagonal > 0, "Матрица ошибок идеально диагональна — модель неправдоподобна"
+    assert (
+        trained_metrics["macro_f1"] <= 0.99
+    ), f"macro-F1 подозрительно идеален: {trained_metrics['macro_f1']}"
 
 
 def test_train_writes_artifacts_and_metrics_schema(trained_metrics):

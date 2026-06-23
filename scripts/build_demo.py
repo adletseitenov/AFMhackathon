@@ -37,8 +37,13 @@ def _record(post_id: str, platform: str, author_handle: str, url: str,
             caption: str, posted_at: str, *, transcript: str = "",
             ocr_text: str = "", visual_concepts: "list[dict] | None" = None,
             media_path: "str | None" = None,
-            thumb_url: "str | None" = None) -> dict:
-    """Собирает одну запись {"post", "extracted"} с предвычисленными признаками."""
+            thumb_url: "str | None" = None,
+            source: str = "seed") -> dict:
+    """Собирает одну запись {"post", "extracted"} с предвычисленными признаками.
+
+    `source` по умолчанию "seed" (исходная форма для tiktok/instagram/youtube);
+    telegram-посты передают source="telegram" (§F8).
+    """
     visual_concepts = visual_concepts or []
     visual_labels = [vc["label"] for vc in visual_concepts]
     combined = _combined_text(caption, transcript, ocr_text, visual_labels)
@@ -56,7 +61,7 @@ def _record(post_id: str, platform: str, author_handle: str, url: str,
             "posted_at": posted_at,
             "media_path": media_path,
             "thumb_url": thumb_url,
-            "source": "seed",
+            "source": source,
         },
         "extracted": {
             "post_id": post_id,
@@ -276,6 +281,48 @@ def build_demo_records() -> list[dict]:
                    "повторяем упражнения вместе, дышим ровно.",
         ocr_text="УТРЕННЯЯ ЗАРЯДКА 10 МИНУТ",
         visual_concepts=[],
+    ))
+
+    # --- Telegram-платформа (F8): дёшево покрываем «и другие платформы» ---
+    # У telegram-постов нет audio/ocr/visual — текст и есть сигнал, поэтому
+    # combined_text = caption. tg_001 и tg_002 ссылаются на ОДИН канал
+    # Casino_Win_KZ -> общая сущность entity:telegram:casino_win_kz -> ребро
+    # в графе F5 (координированная сеть). tg_003 — мягкая, неоднозначная
+    # формулировка БЕЗ явного %/бренда/промокода -> риск падает в REVIEW-полосу
+    # (40-69), чтобы демо-лента показала спред escalate + review + clean.
+
+    # --- tg_001: казино/пирамида, явный escalate (gambling/pyramid) ---
+    recs.append(_record(
+        "tg_001", "telegram", "@Casino_Win_KZ",
+        "https://t.me/Casino_Win_KZ",
+        "🎰💰 Гарантированный доход 300% за неделю! Вывод сразу. Реальные заносы "
+        "каждый день. Пиши в личку 👉 https://t.me/Casino_Win_KZ Промокод KOZ300",
+        "2026-06-24T10:01:00",
+        source="telegram",
+    ))
+
+    # --- tg_002: реф-схема, делит канал Casino_Win_KZ с tg_001 (escalate) ---
+    recs.append(_record(
+        "tg_002", "telegram", "@VipStavka",
+        "https://t.me/VipStavka",
+        "Финансовая свобода с нашим клубом 📈 Заносим по 500 000 ₸ в день. "
+        "Реферальная программа: приведи друга — получи бонус. "
+        "Канал: https://t.me/Casino_Win_KZ",
+        "2026-06-24T10:05:00",
+        source="telegram",
+    ))
+
+    # --- tg_003: мягкая «инвест-приманка», REVIEW-полоса (40-69) ---
+    # Намеренно неоднозначная формулировка: НЕТ явного %, бренда казино,
+    # промокода или «пиши в личку» (сильный dm_cta-сигнал). Поэтому ни один
+    # handcrafted-сигнал не срабатывает, и модель опирается только на лексику
+    # TF-IDF -> риск садится в среднюю полосу (review, ~50-60), а не в escalate.
+    recs.append(_record(
+        "tg_003", "telegram", "@InvestSovetnik",
+        "https://t.me/InvestSovetnik",
+        "Хорошая доходность на вложениях. Пиши https://t.me/InvestSovetnik",
+        "2026-06-24T10:09:00",
+        source="telegram",
     ))
 
     return recs

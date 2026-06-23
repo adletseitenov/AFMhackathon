@@ -9,8 +9,12 @@ handle_upload, собирает Post. F4 /api/analyze вызывает fetch_pos
 """
 
 import os
+import re
+import urllib.request
 import uuid
 from datetime import datetime, timezone
+from html import unescape
+from html.parser import HTMLParser
 
 from app.config import MEDIA_DIR
 from app.extractors.text import normalize
@@ -159,3 +163,104 @@ def fetch_post(
         thumb_url=meta.get("thumb_url") or None,
         source="live",
     )
+
+
+# ---------------------------------------------------------------------------
+# F8 — ОПЦИОНАЛЬНЫЙ best-effort live-fetch публичного Telegram-канала.
+#
+# Использует публичный web-preview t.me/s/<channel> (без авторизации, без новых
+# зависимостей: html.parser + urllib). Весь путь за try/except — при любой ошибке
+# возвращает [] и НЕ ломает вызывающий код. Для демо НИКОГДА не требуется:
+# ядро КӨЗ работает на кэш-датасете (demo_posts.jsonl). §0.5: telegram-сущности
+# извлекаются единственной реализацией app.extractors.text.extract_entities —
+# здесь мы их не дублируем, только собираем Post из публичного текста.
+# ---------------------------------------------------------------------------
+
+_TGME_PREVIEW = "https://t.me/s/{channel}"
+_CHANNEL_RE = re.compile(r"t\.me/(?:s/)?(?P<chan>[A-Za-z0-9_]+)", re.IGNORECASE)
+
+
+def _http_get(url: str) -> str:
+    """GET публичной страницы. Вынесен отдельно — тесты его monkeypatch'ат."""
+    req = urllib.request.Request(
+        url, headers={"User-Agent": "Mozilla/5.0 (KOZ media-watch)"}
+    )
+    with urllib.request.urlopen(req, timeout=8) as resp:  # nosec - публичный web-preview
+        return resp.read().decode("utf-8", errors="replace")
+
+
+class _TgPreviewParser(HTMLParser):
+    """Best-effort парсер публичного t.me/s/<channel> превью.
+
+    Собирает текст всех блоков с классом tgme_widget_message_text. Учитывает
+    вложенные <div> внутри текста сообщения, считая баланс открытий/закрытий.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._depth = 0  # глубина вложенности внутри блока текста
+        self._buf: list[str] = []
+        self.messages: list[str] = []
+
+    def handle_starttag(self, tag, attrs) -> None:
+        cls = dict(attrs).get("class", "") or ""
+        if self._depth:
+            # уже внутри текстового блока — считаем вложенные div'ы
+            if tag == "div":
+                self._depth += 1
+        elif "tgme_widget_message_text" in cls:
+            self._depth = 1
+            self._buf = []
+
+    def handle_endtag(self, tag) -> None:
+        if self._depth and tag == "div":
+            self._depth -= 1
+            if self._depth == 0:
+                txt = unescape("".join(self._buf)).strip()
+                if txt:
+                    self.messages.append(txt)
+
+    def handle_data(self, data) -> None:
+        if self._depth:
+            self._buf.append(data)
+
+
+def _channel_from_url(url: str) -> str:
+    """Имя канала из любой t.me-ссылки (с /s/ или без). Фоллбэк — хвост URL."""
+    m = _CHANNEL_RE.search(url or "")
+    if m:
+        return m.group("chan")
+    return (url or "").rstrip("/").split("/")[-1]
+
+
+def fetch_telegram_channel(url: str, limit: int = 10) -> list:
+    """ОПЦИОНАЛЬНЫЙ live-путь: публичный web-preview Telegram, без авторизации.
+
+    Best-effort: при ЛЮБОЙ ошибке (сеть/парсинг/битый URL) возвращает [] и НЕ
+    пробрасывает исключение. Для демо не требуется — ядро работает на кэш-датасете.
+    Возвращает list[Post] с platform="telegram", source="live".
+    """
+    try:
+        channel = _channel_from_url(url)
+        if not channel:
+            return []
+        html = _http_get(_TGME_PREVIEW.format(channel=channel))
+        parser = _TgPreviewParser()
+        parser.feed(html)
+        posts: list = []
+        for i, text in enumerate(parser.messages[:limit]):
+            posts.append(Post(
+                id=f"tglive_{channel}_{i}",
+                platform="telegram",
+                author_handle="@" + channel,
+                url=f"https://t.me/{channel}/{i}" if i else f"https://t.me/{channel}",
+                caption=normalize(text),
+                posted_at="",
+                media_path=None,
+                thumb_url=None,
+                source="live",
+            ))
+        return posts
+    except Exception:
+        # деградация: понятное пустое поведение, вызывающий код не падает
+        return []

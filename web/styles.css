@@ -1,0 +1,107 @@
+/* КӨЗ console — light minimalist supplements to Tailwind utilities.
+   Pastel risk badges (locked), quiet motion, honest states. */
+
+[x-cloak] { display: none !important; }
+
+/* Fallback type stack if Geist CDN is blocked (still legible offline). */
+:root {
+  --risk-escalate-bg: #FDEBEC; --risk-escalate-tx: #9F2F2D;
+  --risk-review-bg:   #FBF3DB; --risk-review-tx:   #956400;
+  --risk-clean-bg:    #EDF3EC; --risk-clean-tx:    #346538;
+}
+
+body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+
+/* ---- reusable component classes (apply Tailwind @layer-free) ---- */
+.section-h {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #787774;
+  margin-bottom: 6px;
+}
+.badge-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 4px 8px;
+  border-radius: 9999px;
+  white-space: nowrap;
+}
+.evidence {
+  font-size: 13px;
+  line-height: 1.55;
+  color: #111111;
+  background: #FBFBFA;
+  border: 1px solid #EAEAEA;
+  border-radius: 8px;
+  padding: 10px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  min-height: 44px;
+}
+.evidence mark {
+  background: #FBF3DB;
+  color: #956400;
+  padding: 0 2px;
+  border-radius: 3px;
+  font-weight: 500;
+}
+.chart-card {
+  background: #FFFFFF;
+  border: 1px solid #EAEAEA;
+  border-radius: 12px;
+  padding: 18px 20px;
+}
+
+/* ---- line-clamp helpers (no plugin) ---- */
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ---- :active micro-press ---- */
+.press { transition: transform 120ms cubic-bezier(.16,1,.3,1); }
+.press:active { transform: scale(0.98); }
+
+/* ---- skeleton shimmer (ultra-subtle) ---- */
+.skeleton {
+  background: linear-gradient(90deg, #F1F1EF 25%, #E8E8E6 37%, #F1F1EF 63%);
+  background-size: 400% 100%;
+  animation: koz-shimmer 1.4s ease infinite;
+}
+@keyframes koz-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: 0 0; }
+}
+
+/* ---- gentle pulse dot for new live-feed items ---- */
+.pulse-dot { animation: koz-pulse 1.8s ease-in-out infinite; }
+@keyframes koz-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.7); }
+}
+
+/* ---- IntersectionObserver reveal (translateY 12->0) ---- */
+.reveal { opacity: 0; transform: translateY(12px); }
+.reveal.in-view {
+  opacity: 1;
+  transform: none;
+  transition: opacity 600ms cubic-bezier(.16,1,.3,1), transform 600ms cubic-bezier(.16,1,.3,1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .reveal, .reveal.in-view { opacity: 1; transform: none; transition: none; }
+  .pulse-dot, .skeleton { animation: none; }
+}
+
+/* ---- thin scrollbar for the queue ---- */
+.overflow-y-auto::-webkit-scrollbar { width: 8px; }
+.overflow-y-auto::-webkit-scrollbar-thumb { background: #EAEAEA; border-radius: 8px; }
+.overflow-y-auto::-webkit-scrollbar-track { background: transparent; }
