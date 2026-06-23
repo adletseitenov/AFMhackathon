@@ -53,7 +53,7 @@ ingestion (seed-дрип + live yt-dlp/upload)
 
 - Бэкенд: **FastAPI + SQLite**. Своя модель: **scikit-learn**. PDF: **reportlab**.
 - Роуты подключаются авто-роутером из `app/**/routes.py` (фичи не правят `main.py`).
-- Документы защиты: `docs/pitch/` (питч, демо-скрипт, Q&A). Дизайн/план: `docs/superpowers/`.
+- Документы защиты: `docs/pitch/` — питч, демо-скрипт, Q&A и **слайд-дек `docs/pitch/deck.html`** (открыть в браузере, листать стрелками; самодостаточный, офлайн). Дизайн/план: `docs/superpowers/`.
 
 ## Этика и ограничения
 
