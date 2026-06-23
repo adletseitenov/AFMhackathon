@@ -1,0 +1,60 @@
+{
+  "labels": [
+    "gambling",
+    "pyramid",
+    "fraud",
+    "clean"
+  ],
+  "per_class": {
+    "gambling": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "pyramid": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "fraud": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "clean": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    }
+  },
+  "confusion_matrix": [
+    [
+      33,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      32,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      32,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      33
+    ]
+  ],
+  "macro_f1": 1.0,
+  "n_train": 390,
+  "n_test": 130,
+  "model": "FeatureUnion(tfidf-word(1,2)+tfidf-char_wb(3,5)+handcrafted) -> LogisticRegression"
+}

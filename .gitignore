@@ -25,10 +25,16 @@ data/media/
 *.wav
 *.mp3
 
-# DB
+# DB (runtime-generated; model artifacts in app/model/artifacts ARE committed)
 *.sqlite
 *.sqlite3
 *.db
+*.db-wal
+*.db-shm
+data/feature_cache/
+
+# Session / tooling
+.claude/
 
 # OS / IDE
 .DS_Store

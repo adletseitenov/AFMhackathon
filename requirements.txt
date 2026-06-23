@@ -1,0 +1,17 @@
+# КӨЗ — torch-free core (собственная модель = scikit-learn, без эмбеддингов/torch)
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+python-multipart==0.0.9
+scikit-learn==1.5.0
+joblib==1.4.2
+numpy==1.26.4
+reportlab==4.2.0
+yt-dlp==2024.5.27
+pytest==8.2.2
+httpx==0.27.0
+
+# optional live extractors (lazy-import, install only for live upload demo):
+#   faster-whisper==1.0.2
+#   easyocr==1.7.1
+#   open-clip-torch==2.24.0
+#   torch==2.3.0
