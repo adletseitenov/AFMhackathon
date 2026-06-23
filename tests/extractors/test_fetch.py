@@ -8,6 +8,23 @@ import app.ingestion.fetch as fetch
 from app.models import Post
 
 
+def test_ssrf_guard_rejects_non_allowlisted_and_unsafe_urls():
+    # SSRF-контроль: только http(s) к allowlisted-площадкам; всё прочее — отказ.
+    assert fetch._is_safe_public_url("file:///etc/passwd") is False
+    assert fetch._is_safe_public_url("not-a-url") is False
+    # cloud-metadata / loopback / произвольный внутренний хост — не в allowlist
+    assert fetch._is_safe_public_url("http://169.254.169.254/latest/meta-data/") is False
+    assert fetch._is_safe_public_url("http://127.0.0.1:9/x") is False
+    assert fetch._is_safe_public_url("http://internal.local/") is False
+    # host-подмена суффиксом не проходит
+    assert fetch._host_allowed("youtube.com.evil.com") is False
+    assert fetch._host_allowed("evil-tiktok.com") is False
+    # легитимные площадки (и поддомены) — разрешены
+    assert fetch._host_allowed("www.tiktok.com") is True
+    assert fetch._host_allowed("youtu.be") is True
+    assert fetch._host_allowed("t.me") is True
+
+
 def test_module_import_does_not_load_yt_dlp_or_cv2():
     assert "yt_dlp" not in sys.modules
     assert "cv2" not in sys.modules

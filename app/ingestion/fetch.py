@@ -66,16 +66,42 @@ def sample_frames(media_path: str) -> list:
         return []
 
 
-def _is_safe_public_url(url: str) -> bool:
-    """SSRF-защита: разрешаем только http(s) к ПУБЛИЧНЫМ адресам.
+# Поддерживаемые публичные платформы — ЖЁСТКИЙ allowlist хостов. Это главный
+# SSRF-контроль: атакующий не владеет DNS этих доменов, поэтому DNS-rebinding на
+# внутренний IP и redirect на internal-хост практически исключены (площадки не
+# редиректят на приватные адреса). IP-проверка ниже — defense-in-depth.
+_ALLOWED_SUFFIXES = (
+    "tiktok.com",
+    "instagram.com",
+    "youtube.com",
+    "youtu.be",
+    "t.me",
+    "telegram.me",
+)
 
-    Резолвим хост и отклоняем приватные/loopback/link-local/reserved IP, чтобы
-    /api/analyze нельзя было направить на внутренние сервисы или cloud-metadata
-    (напр. http://169.254.169.254/...). Для анти-фрод-инструмента это критично.
+
+def _host_allowed(host: str) -> bool:
+    host = (host or "").lower().rstrip(".")
+    return any(host == d or host.endswith("." + d) for d in _ALLOWED_SUFFIXES)
+
+
+def _is_safe_public_url(url: str) -> bool:
+    """SSRF-защита: только http(s) к ПОДДЕРЖИВАЕМЫМ публичным платформам.
+
+    Два контроля:
+      1) жёсткий allowlist доменов площадок (_host_allowed) — атакующий не владеет
+         их DNS, что снимает DNS-rebinding и redirect-на-internal как практический
+         вектор (площадки не редиректят на приватные адреса);
+      2) резолв хоста и отклонение приватных/loopback/link-local/reserved IP —
+         defense-in-depth (напр. блок http://169.254.169.254/...).
+    Полное IP-pinning несовместимо с yt-dlp (площадки активно используют
+    CDN-редиректы на разные хосты), поэтому опорой служит allowlist.
     """
     try:
         p = urlparse(url or "")
         if p.scheme not in ("http", "https") or not p.hostname:
+            return False
+        if not _host_allowed(p.hostname):
             return False
         for _fam, _type, _proto, _canon, sockaddr in socket.getaddrinfo(p.hostname, None):
             ip = ipaddress.ip_address(sockaddr[0])
