@@ -85,17 +85,41 @@ def _host_allowed(host: str) -> bool:
     return any(host == d or host.endswith("." + d) for d in _ALLOWED_SUFFIXES)
 
 
+def _is_public_ip(ip_str: str) -> bool:
+    """True только для маршрутизируемых публичных адресов.
+
+    Разворачивает IPv4-mapped IPv6 (напр. ::ffff:127.0.0.1 -> 127.0.0.1), чтобы
+    их нельзя было использовать для обхода проверки на приватные/loopback адреса.
+    """
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return False
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
+    return not (
+        ip.is_private or ip.is_loopback or ip.is_link_local
+        or ip.is_reserved or ip.is_multicast or ip.is_unspecified
+    )
+
+
 def _is_safe_public_url(url: str) -> bool:
     """SSRF-защита: только http(s) к ПОДДЕРЖИВАЕМЫМ публичным платформам.
 
     Два контроля:
-      1) жёсткий allowlist доменов площадок (_host_allowed) — атакующий не владеет
-         их DNS, что снимает DNS-rebinding и redirect-на-internal как практический
-         вектор (площадки не редиректят на приватные адреса);
-      2) резолв хоста и отклонение приватных/loopback/link-local/reserved IP —
-         defense-in-depth (напр. блок http://169.254.169.254/...).
-    Полное IP-pinning несовместимо с yt-dlp (площадки активно используют
-    CDN-редиректы на разные хосты), поэтому опорой служит allowlist.
+      1) жёсткий allowlist доменов площадок (_host_allowed) — главный контроль:
+         атакующий не владеет DNS tiktok/instagram/youtube/t.me, поэтому
+         DNS-rebinding на внутренний IP практически невозможен (хост обязан быть
+         реальной площадкой);
+      2) резолв хоста и отклонение приватных/loopback/link-local/reserved IP, в т.ч.
+         IPv4-mapped IPv6 (_is_public_ip) — defense-in-depth (блок 169.254.169.254 и т.п.).
+
+    ОСТАТОЧНЫЙ РИСК (принят для MVP): yt-dlp сам резолвит хост и следует CDN-редиректам,
+    которые здесь повторно не валидируются — полная защита требует egress-proxy с
+    проверкой на connect или ре-валидации каждого redirect-хопа (вне рамок MVP).
+    Allowlist делает это непрактичным, а сам live-fetch — ОПЦИОНАЛЬНЫЙ путь (оцениваемое
+    демо работает на закэшированных признаках без исходящих запросов).
     """
     try:
         p = urlparse(url or "")
@@ -103,14 +127,10 @@ def _is_safe_public_url(url: str) -> bool:
             return False
         if not _host_allowed(p.hostname):
             return False
-        for _fam, _type, _proto, _canon, sockaddr in socket.getaddrinfo(p.hostname, None):
-            ip = ipaddress.ip_address(sockaddr[0])
-            if (
-                ip.is_private or ip.is_loopback or ip.is_link_local
-                or ip.is_reserved or ip.is_multicast or ip.is_unspecified
-            ):
-                return False
-        return True
+        infos = socket.getaddrinfo(p.hostname, None)
+        if not infos:
+            return False
+        return all(_is_public_ip(sockaddr[0]) for *_rest, sockaddr in infos)
     except Exception:
         return False
 

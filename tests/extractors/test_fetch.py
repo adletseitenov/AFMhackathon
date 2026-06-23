@@ -25,6 +25,17 @@ def test_ssrf_guard_rejects_non_allowlisted_and_unsafe_urls():
     assert fetch._host_allowed("t.me") is True
 
 
+def test_is_public_ip_rejects_private_loopback_and_ipv6_mapped():
+    assert fetch._is_public_ip("8.8.8.8") is True
+    assert fetch._is_public_ip("10.0.0.1") is False
+    assert fetch._is_public_ip("127.0.0.1") is False
+    assert fetch._is_public_ip("169.254.169.254") is False
+    assert fetch._is_public_ip("::1") is False
+    # IPv4-mapped IPv6 не должен обходить проверку на loopback
+    assert fetch._is_public_ip("::ffff:127.0.0.1") is False
+    assert fetch._is_public_ip("not-an-ip") is False
+
+
 def test_module_import_does_not_load_yt_dlp_or_cv2():
     assert "yt_dlp" not in sys.modules
     assert "cv2" not in sys.modules
