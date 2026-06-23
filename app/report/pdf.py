@@ -36,7 +36,6 @@ from app.models import FeatureHit, Score
 ACTION_LABELS_RU = {
     "escalate": "Эскалация",
     "review": "На проверку",
-    "monitor": "Наблюдение",
     "auto_clear": "Авто-очистка",
 }
 CATEGORY_LABELS_RU = {

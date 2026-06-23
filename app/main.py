@@ -61,7 +61,10 @@ async def lifespan(application: FastAPI):
     conn = db.connect()
     db.init_db(conn)
     application.state.db = conn
-    application.state.ingestion_tick = ingestion_tick
+    # Реальный drip-reveal: фоновый тикер постепенно раскрывает seed-посты,
+    # имитируя непрерывный поток мониторинга (ticker крутится в этом же event-loop
+    # потоке, что и conn -> без проблем потокобезопасности).
+    application.state.ingestion_tick = lambda: db.reveal_next(conn, config.TICK_REVEAL_N)
     _maybe_seed(conn)
     ticker = asyncio.create_task(_ticker_loop(application))
     application.state.ticker = ticker

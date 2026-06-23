@@ -32,7 +32,7 @@ def _post_node_id(post_id: str) -> str:
 
 
 def _entity_node_id(entity: dict) -> str:
-    return f"entity:{entity['type']}:{entity['normalized']}"
+    return f"entity:{entity.get('type', '?')}:{entity.get('normalized') or entity.get('value', '')}"
 
 
 def _entities_for(conn, post_id: str) -> list[dict]:
@@ -67,12 +67,14 @@ def _build_graph_with_conn(conn, post_ids: list[str]) -> dict:
 
         entities = json.loads(row["entities_json"]) if row["entities_json"] else []
         for ent in entities:
+            if not isinstance(ent, dict) or not ent.get("type"):
+                continue  # пропускаем малформ-записи без падения (как в trends.py)
             eid = _entity_node_id(ent)
             if eid not in nodes:
                 nodes[eid] = {
                     "id": eid,
-                    "label": ent["value"],
-                    "type": ent["type"],
+                    "label": ent.get("value") or ent.get("normalized") or "",
+                    "type": ent.get("type"),
                     "risk": 0,
                 }
             # узел-сущность наследует макс. риск инцидентных постов (кластер)

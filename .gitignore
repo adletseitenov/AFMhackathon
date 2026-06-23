@@ -35,6 +35,9 @@ data/feature_cache/
 
 # Session / tooling
 .claude/
+.playwright-mcp/
+# verification screenshots (regenerable)
+koz-*.png
 
 # OS / IDE
 .DS_Store

@@ -219,14 +219,18 @@ async def api_analyze(request: Request):
             visual_concepts=[], combined_text=cap, entities=[],
         )
 
-    # 3) score_post — собственная модель; персистит score + audit (передаём conn).
-    score = scoring_mod.score_post(post, extracted, conn=conn)
-    action = scoring_mod.recommend_action(score.risk)
-
-    # 4) персист поста + раскрытие, чтобы он попал в ленту.
-    db.insert_post(conn, post)
-    db.upsert_extracted(conn, extracted)
-    db.reveal_post(conn, post.id)
+    # 3-4) скоринг своей моделью + персист поста. Контролируемая 503 вместо
+    # неперехваченной 500 — контракт роута: не ронять запрос.
+    try:
+        score = scoring_mod.score_post(post, extracted, conn=conn)
+        action = scoring_mod.recommend_action(score.risk)
+        db.insert_post(conn, post)
+        db.upsert_extracted(conn, extracted)
+        db.reveal_post(conn, post.id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"скоринг недоступен: {exc}")
 
     result = {
         "post": asdict(post),

@@ -8,13 +8,16 @@ handle_upload, собирает Post. F4 /api/analyze вызывает fetch_pos
 модуля, чтобы тесты могли monkeypatch'ить один seam.
 """
 
+import ipaddress
 import os
 import re
+import socket
 import urllib.request
 import uuid
 from datetime import datetime, timezone
 from html import unescape
 from html.parser import HTMLParser
+from urllib.parse import urlparse
 
 from app.config import MEDIA_DIR
 from app.extractors.text import normalize
@@ -63,8 +66,33 @@ def sample_frames(media_path: str) -> list:
         return []
 
 
+def _is_safe_public_url(url: str) -> bool:
+    """SSRF-защита: разрешаем только http(s) к ПУБЛИЧНЫМ адресам.
+
+    Резолвим хост и отклоняем приватные/loopback/link-local/reserved IP, чтобы
+    /api/analyze нельзя было направить на внутренние сервисы или cloud-metadata
+    (напр. http://169.254.169.254/...). Для анти-фрод-инструмента это критично.
+    """
+    try:
+        p = urlparse(url or "")
+        if p.scheme not in ("http", "https") or not p.hostname:
+            return False
+        for _fam, _type, _proto, _canon, sockaddr in socket.getaddrinfo(p.hostname, None):
+            ip = ipaddress.ip_address(sockaddr[0])
+            if (
+                ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified
+            ):
+                return False
+        return True
+    except Exception:
+        return False
+
+
 def _ytdlp_download(url: str):
     """Лениво грузит yt-dlp и скачивает медиа. -> (media_path, meta) или ("", {})."""
+    if not _is_safe_public_url(url):
+        return "", {}  # SSRF-guard: не делаем исходящий запрос на приватный/невалидный URL
     try:
         import yt_dlp
 

@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>КӨЗ · Media Watch — аналитическая консоль АФМ</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6.5' fill='none' stroke='%23111111' stroke-width='1.2'/%3E%3Ccircle cx='8' cy='8' r='2.3' fill='%23111111'/%3E%3C/svg%3E" />
 
   <!-- Geist + Geist Mono via fontsource CDN; system stack falls back offline -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/geist-sans@5/400.css" />
@@ -16,7 +17,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css" />
 
   <!-- Tailwind Play CDN + inline theme -->
-  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="/vendor/tailwind.js"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -40,15 +41,15 @@
   </script>
 
   <!-- Chart.js + vis-network (graph) -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/vis-network@9.1.9/styles/vis-network.min.css" />
-  <script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+  <script src="/vendor/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="/vendor/vis-network.min.css" />
+  <script src="/vendor/vis-network.min.js"></script>
 
   <link rel="stylesheet" href="/styles.css" />
   <!-- app.js defines window.kozApp; it MUST run before Alpine boots.
        Both are deferred -> execute in document order, so app.js precedes Alpine. -->
   <script defer src="/app.js"></script>
-  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+  <script defer src="/vendor/alpine.min.js"></script>
 </head>
 
 <body class="bg-canvas text-ink font-sans antialiased min-h-screen" x-data="kozApp()" x-init="init()" x-cloak>

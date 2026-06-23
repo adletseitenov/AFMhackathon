@@ -46,6 +46,7 @@ REQUIRED_ENDPOINTS: list[tuple[str, str]] = [
     ("GET", "/api/graph"),
     ("GET", "/api/trends"),
     ("GET", "/api/report/{id}.pdf"),
+    ("POST", "/api/analyze"),
 ]
 
 
@@ -90,7 +91,12 @@ def check_endpoints(client) -> list[tuple[str, int]]:
             real_path = path.replace("{id}", post_id)
         try:
             if method == "POST":
-                resp = client.post(real_path)
+                if path == "/api/analyze":
+                    # живой путь: SSRF-guard блокирует loopback-URL -> мягкая
+                    # деградация -> 200, БЕЗ сети (быстро и детерминированно).
+                    resp = client.post(path, json={"url": "http://127.0.0.1:9/blocked"})
+                else:
+                    resp = client.post(real_path)
             else:
                 resp = client.get(real_path)
             results.append((f"{method} {path}", resp.status_code))

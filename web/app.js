@@ -38,7 +38,6 @@ const ACTION_LABELS = {
   auto_clear: "авто-очистка",
   review: "на проверку",
   escalate: "эскалация",
-  monitor: "мониторинг",
 };
 
 // RU-метки сигналов собственной модели (зеркалят app/decision/explain._FEATURE_LABELS).
