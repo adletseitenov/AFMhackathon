@@ -1,0 +1,37 @@
+# Temp extraction artifacts
+_docx_extracted.txt
+_docx_clean.txt
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+
+# ML model caches / weights (downloaded, not committed)
+models/cache/
+.cache/
+*.pt
+*.bin
+*.onnx
+
+# Data artifacts (large media)
+data/media/
+*.mp4
+*.webm
+*.mov
+*.wav
+*.mp3
+
+# DB
+*.sqlite
+*.sqlite3
+*.db
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
