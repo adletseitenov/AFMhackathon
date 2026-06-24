@@ -12,6 +12,7 @@ import importlib
 import json
 import os
 import pkgutil
+import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
@@ -20,6 +21,15 @@ from fastapi.staticfiles import StaticFiles
 
 import app as app_pkg
 from app import config, db
+
+# Windows-консоль по умолчанию cp1252 — кириллица в server-логах (фоновый поиск,
+# discovery-сводки) роняет print() с UnicodeEncodeError ('charmap' codec). Принудительно
+# переводим stdout/stderr в UTF-8 с заменой (best-effort: не падаем, если поток не поддерживает).
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 
 def ingestion_tick() -> None:
