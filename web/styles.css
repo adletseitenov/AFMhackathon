@@ -59,6 +59,33 @@ body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; 
   padding: 18px 20px;
 }
 
+/* ---- provenance / source badge (quiet, 1px, no emoji) ---- */
+.src-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  color: #787774;
+  background: #FBFBFA;
+  border: 1px solid #EAEAEA;
+  border-radius: 9999px;
+  padding: 3px 7px;
+  white-space: nowrap;
+}
+
+/* ---- real preview thumbnail on feed cards ---- */
+.src-thumb {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid #EAEAEA;
+  background: #F1F1EF;
+}
+
 /* ---- line-clamp helpers (no plugin) ---- */
 .line-clamp-2 {
   display: -webkit-box;

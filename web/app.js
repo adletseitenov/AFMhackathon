@@ -62,6 +62,21 @@ const PLATFORM_ICONS = {
   upload: "ph-upload-simple",
 };
 
+// Происхождение поста (post.source): seed | live | discovered | telegram.
+// «live» — выгрузка реального канала; «discovered» — авто-поиск по YouTube.
+const SOURCE_LABELS = {
+  seed: "демо",
+  live: "загрузка",
+  discovered: "YouTube-поиск",
+  telegram: "Telegram",
+};
+const SOURCE_ICONS = {
+  seed: "ph-flask",
+  live: "ph-download-simple",
+  discovered: "ph-youtube-logo",
+  telegram: "ph-telegram-logo",
+};
+
 function escapeHtml(s) {
   return String(s == null ? "" : s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -110,10 +125,20 @@ function kozApp() {
     feedLoading: true,
     feedError: "",
     categoryFilter: "",
+    realOnly: true,          // ЛЕНТА defaults to real posts only (real_only=1)
     ticking: false,
     _knownIds: new Set(),
     _newIds: new Set(),
     _pollTimer: null,
+
+    // --- autonomous discovery (POST /api/discover -> {job_id}; poll /api/jobs/{id}) ---
+    discovering: false,
+    discoverStage: "",       // RU stage string from the running job
+    discoverProgress: 0,     // 0..100
+    discoverError: "",
+    discoverResult: null,    // {added, youtube_added, telegram_added, flagged, queries, samples:[...]}
+    _discoverJobId: null,
+    _discoverTimer: null,
 
     // --- telegram scanner (Лента) ---
     scanInput: "",
@@ -129,6 +154,9 @@ function kozApp() {
     watchAdding: false,
     watchScanning: false,
     watchScanResult: null,
+    // derived per-channel stats from the real feed: {'@channel': {collected, flagged}}
+    watchStats: {},
+    watchStatsLoading: false,
 
     // --- drill-down ---
     detail: null,
@@ -138,8 +166,9 @@ function kozApp() {
     // --- graph ---
     graphMinRisk: 0,
     graphError: "",
+    graphLoading: false,
+    graphEmpty: false,
     _network: null,
-    _graphLoaded: false,
 
     // --- trends ---
     trends: null,
@@ -169,9 +198,14 @@ function kozApp() {
 
     setTab(id) {
       this.tab = id;
-      if (id === "graph") this.$nextTick(() => this.loadGraph(true));
+      // Граф: ВСЕГДА перестраиваем из свежих данных при входе во вкладку
+      // (чтобы отразить вновь найденные/просканированные посты).
+      if (id === "graph") this.$nextTick(() => this.loadGraph());
       if (id === "trends") this.$nextTick(() => this.loadTrends());
-      if (id === "watch") this.loadWatchlist();
+      if (id === "watch") {
+        this.loadWatchlist();
+        this.loadWatchStats();
+      }
     },
 
     // ===================================================== top bar
@@ -189,6 +223,7 @@ function kozApp() {
     // ===================================================== feed
     async loadFeed() {
       let url = "/api/feed?limit=100";
+      if (this.realOnly) url += "&real_only=1";   // по умолчанию — только реальные посты
       if (this.categoryFilter) url += "&category=" + encodeURIComponent(this.categoryFilter);
       try {
         const r = await fetch(url);
@@ -237,6 +272,100 @@ function kozApp() {
       }
     },
 
+    // Переключатель «Только реальные»: меняет real_only и перезагружает ленту.
+    toggleRealOnly() {
+      this.realOnly = !this.realOnly;
+      this.feedLoading = true;
+      this.loadFeed();
+    },
+
+    // ===================================================== autonomous discovery
+    //
+    // THE headline feature. POST /api/discover {per_query, with_telegram} -> {job_id}.
+    // We poll GET /api/jobs/{job_id} every ~800ms for {status, stage, progress, result, error}
+    // until status is 'done' or 'error', surfacing the RU stage + percent meanwhile.
+    // On 'done' the result carries {added, youtube_added, telegram_added, flagged, queries, samples}.
+    async discover() {
+      if (this.discovering) return;
+      this._stopDiscoverPoll();
+      this.discovering = true;
+      this.discoverError = "";
+      this.discoverResult = null;
+      this.discoverStage = "постановка в очередь";
+      this.discoverProgress = 0;
+      try {
+        const r = await fetch("/api/discover", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ per_query: 4, with_telegram: true }),
+        });
+        if (!r.ok) {
+          let msg = "HTTP " + r.status;
+          try { const j = await r.json(); if (j.detail) msg = j.detail; } catch (_) {}
+          throw new Error(msg);
+        }
+        const start = await r.json();
+        if (!start.job_id) {
+          // На случай синхронного ответа с готовым результатом.
+          if (start.added !== undefined || start.samples) {
+            this._applyDiscoverResult(start);
+            this.discovering = false;
+            await this.loadFeed();
+            return;
+          }
+          throw new Error("сервер не вернул идентификатор задачи");
+        }
+        this._discoverJobId = start.job_id;
+        this._pollDiscover();
+      } catch (e) {
+        this.discoverError = "Поиск не удался: " + e.message;
+        this.discovering = false;
+      }
+    },
+
+    _pollDiscover() {
+      this._discoverTimer = setInterval(async () => {
+        if (!this._discoverJobId) return;
+        try {
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this._discoverJobId));
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          const job = await r.json();
+          this.discoverStage = job.stage || this.discoverStage || "поиск в интернете";
+          if (typeof job.progress === "number") this.discoverProgress = job.progress;
+
+          if (job.status === "done") {
+            this._stopDiscoverPoll();
+            this._applyDiscoverResult(job.result || {});
+            this.discovering = false;
+            await this.loadFeed(); // найденные РЕАЛЬНЫЕ посты появляются в ленте
+          } else if (job.status === "error") {
+            this._stopDiscoverPoll();
+            this.discoverError = "Поиск не удался: " + (job.error || "неизвестная ошибка");
+            this.discovering = false;
+          }
+        } catch (e) {
+          // временный сбой сети — показываем, но не убиваем задачу
+          this.discoverError = "Потеряна связь с задачей поиска: " + e.message;
+        }
+      }, 800);
+    },
+
+    _applyDiscoverResult(res) {
+      this.discoverResult = {
+        added: res.added || 0,
+        youtube_added: res.youtube_added || 0,
+        telegram_added: res.telegram_added || 0,
+        flagged: res.flagged || 0,
+        queries: res.queries || [],
+        samples: res.samples || [],
+      };
+    },
+
+    _stopDiscoverPoll() {
+      if (this._discoverTimer) { clearInterval(this._discoverTimer); this._discoverTimer = null; }
+      this._discoverJobId = null;
+    },
+
     // ===================================================== drill-down
     async openPost(id) {
       this.selectedId = id;
@@ -255,9 +384,13 @@ function kozApp() {
     },
 
     // ===================================================== graph
-    async loadGraph(force) {
-      if (this._graphLoaded && !force) return;
+    //
+    // ВСЕГДА тянет свежие /api/graph при входе во вкладку и по кнопке «Обновить».
+    // Прежний экземпляр vis-network уничтожается перед созданием нового, иначе
+    // остаётся «мёртвый» канвас и граф не отражает новые посты.
+    async loadGraph() {
       this.graphError = "";
+      this.graphEmpty = false;
       const el = document.getElementById("graph");
       if (!el) return;
 
@@ -265,16 +398,21 @@ function kozApp() {
         this.graphError = "Библиотека графа недоступна (CDN заблокирован).";
         return;
       }
+
+      // всегда уничтожаем прошлый граф перед свежим построением
+      if (this._network) { this._network.destroy(); this._network = null; }
+      el.innerHTML = "";
+      this.graphLoading = true;
       try {
         const r = await fetch("/api/graph?min_risk=" + this.graphMinRisk);
         if (!r.ok) throw new Error("HTTP " + r.status);
         const g = await r.json();
-        this._graphLoaded = true;
+        this.graphLoading = false;
 
         if (!g.nodes || !g.nodes.length) {
-          if (this._network) { this._network.destroy(); this._network = null; }
+          this.graphEmpty = true;
           el.innerHTML =
-            '<div class="h-full grid place-items-center text-muted text-[13px]">Нет связей для отображения при заданном пороге риска.</div>';
+            '<div class="h-full grid place-items-center text-muted text-[13px]">Нет связей при заданном пороге риска. Понизьте порог или найдите новые посты.</div>';
           return;
         }
 
@@ -307,7 +445,7 @@ function kozApp() {
           physics: { stabilization: true, barnesHut: { gravitationalConstant: -3500, springLength: 120 } },
           nodes: { borderWidth: 1.5 },
         };
-        if (this._network) this._network.destroy();
+        // экземпляр уже уничтожен в начале loadGraph — создаём свежий
         this._network = new vis.Network(el, data, options);
 
         this._network.on("click", (params) => {
@@ -319,6 +457,7 @@ function kozApp() {
           }
         });
       } catch (e) {
+        this.graphLoading = false;
         this.graphError = "Не удалось построить граф: " + e.message;
       }
     },
@@ -610,6 +749,7 @@ function kozApp() {
         const data = await r.json();
         this.watchlist = (data && data.channels) || [];
         this.watchInput = "";
+        this.loadWatchStats(); // обновить дашборд после добавления
       } catch (e) {
         this.watchError = "Не удалось добавить канал: " + e.message;
       } finally {
@@ -626,6 +766,7 @@ function kozApp() {
         if (!r.ok) throw new Error("HTTP " + r.status);
         const data = await r.json();
         this.watchlist = (data && data.channels) || [];
+        this.loadWatchStats(); // обновить дашборд после удаления
       } catch (e) {
         this.watchError = "Не удалось удалить канал: " + e.message;
       }
@@ -640,12 +781,50 @@ function kozApp() {
         const r = await fetch("/api/watchlist/scan", { method: "POST" });
         if (!r.ok) throw new Error("HTTP " + r.status);
         this.watchScanResult = await r.json();
-        await this.loadFeed(); // surface freshly scanned posts in the queue
+        await this.loadFeed();      // показать свежесканированные посты в ленте
+        await this.loadWatchStats(); // и пересчитать статистику дашборда
       } catch (e) {
         this.watchError = "Сканирование списка не удалось: " + e.message;
       } finally {
         this.watchScanning = false;
       }
+    },
+
+    // Дашборд мониторинга: один проход по реальной ленте (limit=500),
+    // агрегируем по author_handle == '@'+channel. Считаем «собрано» и «флагнуто (>=70)».
+    async loadWatchStats() {
+      this.watchStatsLoading = true;
+      try {
+        const r = await fetch("/api/feed?real_only=1&limit=500");
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const rows = await r.json();
+        const stats = {};
+        for (const ch of this.watchlist) {
+          stats[ch] = { collected: 0, flagged: 0 };
+        }
+        // быстрый индекс канал-в-нижнем-регистре -> исходное имя
+        const byLower = {};
+        for (const ch of this.watchlist) {
+          byLower[("@" + String(ch).replace(/^@/, "")).toLowerCase()] = ch;
+        }
+        for (const row of rows) {
+          const handle = String((row.post && row.post.author_handle) || "").toLowerCase();
+          const ch = byLower[handle];
+          if (!ch) continue;
+          stats[ch].collected += 1;
+          if ((row.score && row.score.risk) >= 70) stats[ch].flagged += 1;
+        }
+        this.watchStats = stats;
+      } catch (e) {
+        // дашборд не критичен — молча оставляем нули, ошибку показывает основной блок
+        this.watchStats = {};
+      } finally {
+        this.watchStatsLoading = false;
+      }
+    },
+
+    watchStat(channel) {
+      return this.watchStats[channel] || { collected: 0, flagged: 0 };
     },
 
     // ===================================================== view helpers
@@ -657,6 +836,19 @@ function kozApp() {
     actionLabel(a) { return ACTION_LABELS[a] || a; },
     featureLabel(f) { return FEATURE_LABELS[f] || f; },
     platformIcon(p) { return PLATFORM_ICONS[(p || "").toLowerCase()] || "ph-globe"; },
+
+    // Происхождение поста (источник) -> человекочитаемая метка для бейджа.
+    sourceLabel(s) { return SOURCE_LABELS[(s || "").toLowerCase()] || "источник"; },
+    sourceIcon(s) { return SOURCE_ICONS[(s || "").toLowerCase()] || "ph-circle"; },
+
+    // Есть ли у поста реальная ссылка http(s) для кликабельного перехода.
+    hasRealUrl(post) {
+      return !!(post && post.url && /^https?:\/\//i.test(post.url));
+    },
+    // Есть ли что показать в медиа-области (видео-файл, превью-картинка или ссылка).
+    hasAnyMedia(post) {
+      return !!(post && (post.media_path || post.thumb_url || this.hasRealUrl(post)));
+    },
 
     mediaSrc(path) {
       if (!path) return "";
