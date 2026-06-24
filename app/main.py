@@ -203,5 +203,12 @@ def api_metrics():
     return json.loads(config.METRICS_PATH.read_text(encoding="utf-8"))
 
 
+# Скачанные клипы (deep-разбор/live-проверка) отдаём статикой, чтобы аналитик мог
+# проиграть проанализированное видео в drill-down (фронт строит /data/media/<file>).
+# Монтируем ДО корневого "/" (Starlette матчит mounts по порядку) — иначе catch-all
+# перехватит путь и вернёт 404.
+config.MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/data/media", StaticFiles(directory=str(config.MEDIA_DIR)), name="media")
+
 # Статика монтируется ПОСЛЕДНЕЙ (после всех @app.get и авто-роутеров) — §0.6.
 app.mount("/", StaticFiles(directory=str(config.WEB_DIR), html=True), name="web")

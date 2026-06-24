@@ -180,6 +180,25 @@ def _is_safe_public_url(url: str) -> bool:
         return False
 
 
+_NODE_BIN_CACHE = None
+
+
+def _js_runtimes():
+    """yt-dlp 2026+ требует JS-runtime для полноценной экстракции YouTube — без него
+    выгрузка деградирует («No supported JavaScript runtime could be found»). Node в
+    системе уже есть (фронт его использует), подключаем его как runtime.
+    env KOZ_NODE_BIN переопределяет путь. -> dict для ydl_opts['js_runtimes'] или None.
+    """
+    global _NODE_BIN_CACHE
+    if _NODE_BIN_CACHE is None:
+        import shutil
+
+        _NODE_BIN_CACHE = os.environ.get("KOZ_NODE_BIN") or shutil.which("node") or ""
+    if not _NODE_BIN_CACHE:
+        return None
+    return {"deno": {"path": None}, "node": {"path": _NODE_BIN_CACHE}}
+
+
 def _ytdlp_download(url: str):
     """Лениво грузит yt-dlp и скачивает медиа. -> (media_path, meta) или ("", {})."""
     if not _is_safe_public_url(url):
@@ -195,6 +214,9 @@ def _ytdlp_download(url: str):
             "noplaylist": True,
             "format": "mp4/best",
         }
+        js_rt = _js_runtimes()
+        if js_rt:
+            opts["js_runtimes"] = js_rt
         ffmpeg_loc = _ffmpeg_location()
         if ffmpeg_loc:
             # yt-dlp использует ffmpeg/ffprobe для нарезки/склейки.

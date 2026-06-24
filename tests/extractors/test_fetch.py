@@ -36,6 +36,21 @@ def test_is_public_ip_rejects_private_loopback_and_ipv6_mapped():
     assert fetch._is_public_ip("not-an-ip") is False
 
 
+def test_js_runtimes_wires_node_when_present(monkeypatch):
+    # yt-dlp 2026+ требует JS-runtime для экстракции YouTube; если node есть —
+    # _js_runtimes() отдаёт корректный ydl_opts-словарь, иначе None.
+    monkeypatch.setenv("KOZ_NODE_BIN", r"C:\node\node.exe")
+    monkeypatch.setattr(fetch, "_NODE_BIN_CACHE", None, raising=False)
+    rt = fetch._js_runtimes()
+    assert rt == {"deno": {"path": None}, "node": {"path": r"C:\node\node.exe"}}
+
+    # node недоступен (нет env, which вернул None) -> None, экстракция деградирует мягко
+    monkeypatch.delenv("KOZ_NODE_BIN", raising=False)
+    monkeypatch.setattr(fetch, "_NODE_BIN_CACHE", None, raising=False)
+    monkeypatch.setattr("shutil.which", lambda _name: None)
+    assert fetch._js_runtimes() is None
+
+
 def test_module_import_does_not_load_yt_dlp_or_cv2():
     assert "yt_dlp" not in sys.modules
     assert "cv2" not in sys.modules

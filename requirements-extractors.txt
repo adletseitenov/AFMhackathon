@@ -12,6 +12,10 @@ open-clip-torch
 opencv-python-headless
 imageio-ffmpeg
 curl_cffi
+yt-dlp-ejs
+# yt-dlp-ejs — solver для YouTube «n challenge»; современный yt-dlp без него отдаёт
+# "This video is not available" на части роликов. Нужен JS-runtime (node): уже есть в
+# системе, app.ingestion.fetch._js_runtimes() подключает его (env KOZ_NODE_BIN переопределяет).
 # curl_cffi нужен yt-dlp для impersonation TikTok (иначе "Unable to extract universal data").
 # Плюс нужен статичный ffmpeg+ffprobe (yt-dlp использует для нарезки/склейки).
 # Windows: https://github.com/BtbN/FFmpeg-Builds/releases -> положить ffmpeg.exe/ffprobe.exe
