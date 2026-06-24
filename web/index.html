@@ -118,6 +118,183 @@
     <!-- ============================================================= -->
     <section x-show="tab === 'feed'" x-cloak class="space-y-5">
 
+      <!-- ===== АКТУАЛЬНЫЕ ПРОБЛЕМЫ — самое опасное прямо сейчас ===== -->
+      <!-- Дашборд новых опасных поступлений: проблемы-угрозы, конторы, каналы
+           и приоритезированные решения. GET /api/hotspots (авто-загрузка в init). -->
+      <section class="rounded-card border border-line bg-surface shadow-diffuse p-5" aria-label="Актуальные проблемы">
+        <div class="flex flex-wrap items-center gap-3">
+          <div class="flex items-center gap-2.5 shrink-0">
+            <span class="grid place-items-center w-8 h-8 rounded-soft bg-[#FDEBEC] text-[#9F2F2D] border border-[#F3D5D5]">
+              <i class="ph ph-fire text-[18px]"></i>
+            </span>
+            <div class="leading-tight">
+              <h2 class="text-[14px] font-semibold tracking-tight">Актуальные проблемы</h2>
+              <p class="text-[11px] text-muted -mt-0.5">самое опасное прямо сейчас — проблемы, конторы и каналы</p>
+            </div>
+          </div>
+          <!-- сводка-счётчик эскалаций (Ф8) -->
+          <span class="badge-chip border ml-1" style="background:#FDEBEC;color:#9F2F2D"
+                x-show="hotspots && hotspotsEscalateTotal > 0" x-cloak
+                title="Суммарно постов уровня «эскалация» по актуальным проблемам">
+            <i class="ph ph-warning text-[12px] mr-1"></i>
+            эскалаций: <span class="font-mono tnum ml-1" x-text="hotspotsEscalateTotal"></span>
+          </span>
+          <button @click="loadHotspots()" :disabled="hotspotsLoading" title="Обновить актуальные проблемы"
+                  class="lift ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-soft border border-line bg-surface text-[12px] text-ink hover:bg-canvas disabled:opacity-50">
+            <i class="ph text-[14px]" :class="hotspotsLoading ? 'ph-circle-notch animate-spin' : 'ph-arrows-clockwise'"></i>
+            <span x-text="hotspotsLoading ? 'Обновление…' : 'Обновить'"></span>
+          </button>
+        </div>
+
+        <!-- error -->
+        <template x-if="hotspotsError">
+          <div role="alert" class="rounded-soft border border-[#F3D5D5] bg-[#FDEBEC] text-[#9F2F2D] text-[12px] px-3 py-2 mt-3 flex items-start gap-2">
+            <i class="ph ph-warning-circle text-[14px] mt-px shrink-0"></i><span x-text="hotspotsError"></span>
+          </div>
+        </template>
+
+        <!-- skeleton -->
+        <template x-if="hotspotsLoading && !hotspots">
+          <div class="mt-4 grid grid-cols-12 gap-4">
+            <template x-for="i in 4" :key="i">
+              <div class="col-span-12 sm:col-span-6 lg:col-span-3 rounded-card border border-line bg-surface p-3.5">
+                <div class="h-3 w-20 rounded skeleton"></div>
+                <div class="h-3.5 w-full rounded skeleton mt-3"></div>
+                <div class="h-3.5 w-2/3 rounded skeleton mt-2"></div>
+              </div>
+            </template>
+          </div>
+        </template>
+
+        <!-- 4 колонки: проблемы · конторы · telegram · youtube -->
+        <template x-if="hotspots">
+          <div class="mt-4 grid grid-cols-12 gap-4">
+
+            <!-- (1) ПРОБЛЕМЫ (категории-угрозы) -->
+            <div class="col-span-12 sm:col-span-6 lg:col-span-3 rounded-card border border-line bg-canvas p-3.5 reveal">
+              <h3 class="section-h flex items-center gap-1.5"><i class="ph ph-warning-octagon text-[13px]"></i>Проблемы</h3>
+              <template x-if="!hotspots.top_problems || !hotspots.top_problems.length">
+                <p class="text-[12px] text-muted">нет данных</p>
+              </template>
+              <ul class="space-y-2.5" x-show="hotspots.top_problems && hotspots.top_problems.length">
+                <template x-for="(p, i) in hotspots.top_problems" :key="i">
+                  <li>
+                    <div class="flex items-center justify-between gap-2">
+                      <span class="text-[13px] font-medium truncate" x-text="p.label || categoryLabel(p.category)"></span>
+                      <span class="font-mono tnum text-[13px] font-medium px-1.5 py-0.5 rounded-md shrink-0"
+                            :style="avgRiskBadge(p.avg_risk)" :title="'средний риск ' + Math.round(p.avg_risk || 0)"
+                            x-text="Math.round(p.avg_risk || 0)"></span>
+                    </div>
+                    <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted">
+                      <span>постов <span class="font-mono tnum text-ink" x-text="p.count"></span></span>
+                      <span x-show="p.escalate_count" class="text-[#9F2F2D]">эскалаций: <span class="font-mono tnum" x-text="p.escalate_count"></span></span>
+                    </div>
+                  </li>
+                </template>
+              </ul>
+            </div>
+
+            <!-- (2) КОНТОРЫ (операторы) -->
+            <div class="col-span-12 sm:col-span-6 lg:col-span-3 rounded-card border border-line bg-canvas p-3.5 reveal">
+              <h3 class="section-h flex items-center gap-1.5"><i class="ph ph-buildings text-[13px]"></i>Конторы</h3>
+              <template x-if="!hotspots.top_operators || !hotspots.top_operators.length">
+                <p class="text-[12px] text-muted">нет данных</p>
+              </template>
+              <ul class="space-y-2.5" x-show="hotspots.top_operators && hotspots.top_operators.length">
+                <template x-for="(o, i) in hotspots.top_operators" :key="i">
+                  <li>
+                    <div class="flex items-center justify-between gap-2">
+                      <span class="text-[13px] font-medium truncate" x-text="o.brand"></span>
+                      <span class="font-mono tnum text-[13px] font-medium px-1.5 py-0.5 rounded-md shrink-0"
+                            :style="avgRiskBadge(o.avg_risk)" :title="'средний риск ' + Math.round(o.avg_risk || 0)"
+                            x-text="Math.round(o.avg_risk || 0)"></span>
+                    </div>
+                    <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted">
+                      <span>постов <span class="font-mono tnum text-ink" x-text="o.count"></span></span>
+                      <span class="lic-badge" x-show="o.licensed === true"
+                            title="Оператор лицензирован в РК — блокировка не требуется. Проверьте рекламные нормы.">
+                        <i class="ph ph-seal-check text-[12px]"></i><span>разрешён в РК</span>
+                      </span>
+                    </div>
+                  </li>
+                </template>
+              </ul>
+            </div>
+
+            <!-- (3) TELEGRAM -->
+            <div class="col-span-12 sm:col-span-6 lg:col-span-3 rounded-card border border-line bg-canvas p-3.5 reveal">
+              <h3 class="section-h flex items-center gap-1.5"><i class="ph ph-telegram-logo text-[13px]"></i>Telegram</h3>
+              <template x-if="!hotspots.top_telegram || !hotspots.top_telegram.length">
+                <p class="text-[12px] text-muted">нет данных</p>
+              </template>
+              <ul class="space-y-2.5" x-show="hotspots.top_telegram && hotspots.top_telegram.length">
+                <template x-for="(c, i) in hotspots.top_telegram" :key="i">
+                  <li>
+                    <div class="flex items-center justify-between gap-2">
+                      <span class="text-[12px] font-mono truncate" x-text="c.channel"></span>
+                      <span class="font-mono tnum text-[13px] font-medium px-1.5 py-0.5 rounded-md shrink-0"
+                            :style="avgRiskBadge(c.avg_risk)" :title="'средний риск ' + Math.round(c.avg_risk || 0)"
+                            x-text="Math.round(c.avg_risk || 0)"></span>
+                    </div>
+                    <div class="mt-1 text-[11px] text-muted">постов <span class="font-mono tnum text-ink" x-text="c.count"></span></div>
+                  </li>
+                </template>
+              </ul>
+            </div>
+
+            <!-- (4) YOUTUBE -->
+            <div class="col-span-12 sm:col-span-6 lg:col-span-3 rounded-card border border-line bg-canvas p-3.5 reveal">
+              <h3 class="section-h flex items-center gap-1.5"><i class="ph ph-youtube-logo text-[13px]"></i>YouTube</h3>
+              <template x-if="!hotspots.top_youtube || !hotspots.top_youtube.length">
+                <p class="text-[12px] text-muted">нет данных</p>
+              </template>
+              <ul class="space-y-2.5" x-show="hotspots.top_youtube && hotspots.top_youtube.length">
+                <template x-for="(c, i) in hotspots.top_youtube" :key="i">
+                  <li>
+                    <div class="flex items-center justify-between gap-2">
+                      <span class="text-[13px] font-medium truncate" x-text="c.channel"></span>
+                      <span class="font-mono tnum text-[13px] font-medium px-1.5 py-0.5 rounded-md shrink-0"
+                            :style="avgRiskBadge(c.avg_risk)" :title="'средний риск ' + Math.round(c.avg_risk || 0)"
+                            x-text="Math.round(c.avg_risk || 0)"></span>
+                    </div>
+                    <div class="mt-1 text-[11px] text-muted">постов <span class="font-mono tnum text-ink" x-text="c.count"></span></div>
+                  </li>
+                </template>
+              </ul>
+            </div>
+          </div>
+        </template>
+
+        <!-- блок РЕШЕНИЙ (recommendations) — приоритезированные действия -->
+        <template x-if="hotspots && hotspots.recommendations && hotspots.recommendations.length">
+          <div class="mt-4 pt-4 border-t border-line">
+            <div class="flex items-center gap-2 mb-3">
+              <i class="ph ph-lightbulb text-[15px] text-ink"></i>
+              <h3 class="section-h !mb-0">Решения</h3>
+              <span class="text-[11px] text-muted normal-case font-normal tracking-normal">приоритетные действия по актуальным проблемам</span>
+            </div>
+            <div class="grid grid-cols-12 gap-4">
+              <template x-for="(rec, i) in hotspots.recommendations.slice(0, 5)" :key="i">
+                <article class="reveal col-span-12 md:col-span-6 xl:col-span-4 rounded-card border border-line bg-canvas p-3.5 flex flex-col gap-2">
+                  <div class="flex items-start justify-between gap-3">
+                    <h4 class="text-[13px] font-semibold tracking-tight leading-snug" x-text="rec.title"></h4>
+                    <span class="badge-chip border shrink-0" :style="priorityBadge(rec.priority)" x-text="priorityLabel(rec.priority)"></span>
+                  </div>
+                  <p class="text-[12px] text-muted leading-snug" x-show="rec.rationale" x-text="rec.rationale"></p>
+                  <div class="rounded-soft border border-line bg-surface px-3 py-2 flex items-start gap-2" x-show="rec.action">
+                    <i class="ph ph-arrow-bend-down-right text-[14px] text-ink mt-px shrink-0"></i>
+                    <span class="text-[12px] text-ink font-medium" x-text="rec.action"></span>
+                  </div>
+                  <p class="text-[11px] text-muted flex items-start gap-1.5" x-show="rec.evidence">
+                    <i class="ph ph-info text-[12px] mt-px shrink-0"></i><span x-text="rec.evidence"></span>
+                  </p>
+                </article>
+              </template>
+            </div>
+          </div>
+        </template>
+      </section>
+
       <!-- ===== Autonomous discovery — THE headline feature ===== -->
       <section class="rounded-card border border-ink/15 bg-surface shadow-diffuse p-4" aria-label="Автономный поиск">
         <div class="flex flex-wrap items-center gap-3">
@@ -413,12 +590,31 @@
             <option value="twitch">Twitch</option>
             <option value="kick">Kick</option>
           </select>
+          <select x-model="actionFilter" @change="loadFeed()" title="Фильтр по уровню опасности"
+                  class="bg-surface border border-line rounded-soft text-[12px] px-2 py-1 outline-none focus:border-muted">
+            <option value="">любая опасность</option>
+            <option value="escalate">эскалация</option>
+            <option value="review">на проверку</option>
+            <option value="clean">чисто</option>
+          </select>
+          <select x-model="licensedFilter" @change="loadFeed()" title="Фильтр по легальности оператора"
+                  class="bg-surface border border-line rounded-soft text-[12px] px-2 py-1 outline-none focus:border-muted">
+            <option value="all">вся легальность</option>
+            <option value="licensed">разрешённые в РК</option>
+            <option value="unlicensed">без лицензии</option>
+          </select>
           <select x-model="sortBy" @change="loadFeed()" title="Порядок сортировки очереди"
                   class="bg-surface border border-line rounded-soft text-[12px] px-2 py-1 outline-none focus:border-muted">
             <option value="relevance">по релевантности</option>
             <option value="novelty">по новизне</option>
+            <option value="newest">сначала новые</option>
             <option value="popularity">по популярности</option>
           </select>
+          <label class="inline-flex items-center gap-1.5 text-[12px] text-muted" title="Только посты не старше выбранной даты публикации">
+            <span>с даты</span>
+            <input type="date" x-model="sinceFilter" @change="loadFeed()" aria-label="Показывать посты не старше этой даты публикации"
+                   class="bg-surface border border-line rounded-soft text-[12px] px-2 py-1 outline-none focus:border-muted" />
+          </label>
           <button @click="refresh()" :disabled="ticking" title="Обновить ленту"
                   class="lift inline-flex items-center gap-1.5 px-2.5 py-1 rounded-soft border border-line bg-surface text-[12px] text-ink hover:bg-canvas disabled:opacity-50">
             <i class="ph text-[14px]" :class="ticking ? 'ph-circle-notch animate-spin' : 'ph-arrows-clockwise'"></i><span x-text="ticking ? '…' : 'Обновить'"></span>
@@ -505,7 +701,7 @@
             <article @click="openPost(row.post.id)" tabindex="0"
                      @keydown.enter="openPost(row.post.id)" @keydown.space.prevent="openPost(row.post.id)"
                      class="reveal q-card group cursor-pointer rounded-card border bg-surface p-3.5"
-                     :class="row.post.id === selectedId ? 'border-ink is-selected' : 'border-line hover:border-muted'"
+                     :class="(row.post.id === selectedId ? 'border-ink is-selected' : 'border-line hover:border-muted') + (riskTier(row.score.risk) === 'escalate' ? ' is-escalate' : '')"
                      :data-new="isNew(row.post.id)">
               <div class="flex items-start justify-between gap-3">
                 <div class="score-cluster">
@@ -556,6 +752,19 @@
                   <i class="ph ph-eye text-[12px]"></i>
                   <span x-text="formatViews(row.post.view_count)"></span>
                 </span>
+                <!-- статус «в очереди» -->
+                <span class="src-badge" x-show="row.post.queued" title="Материал поставлен в очередь на разбор">
+                  <i class="ph ph-bookmark-simple text-[12px]"></i>
+                  <span>в очереди</span>
+                </span>
+                <!-- тоггл очереди: @click.stop чтобы не открыть drill-down -->
+                <button type="button" @click.stop="toggleQueue(row.post)" :disabled="queueSaving"
+                        :title="row.post.queued ? 'Убрать материал из очереди' : 'Поставить материал в очередь'"
+                        class="lift ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-soft text-[11px] font-medium border disabled:opacity-50"
+                        :class="row.post.queued ? 'bg-surface text-muted border-line hover:bg-canvas' : 'bg-ink text-white border-ink hover:opacity-90'">
+                  <i class="ph text-[12px]" :class="row.post.queued ? 'ph-bookmark-simple-slash' : 'ph-bookmark-simple'"></i>
+                  <span x-text="row.post.queued ? 'Убрать из очереди' : 'В очередь'"></span>
+                </button>
               </div>
 
               <!-- real clickable link — pinned to a clean baseline across cards -->
@@ -647,12 +856,63 @@
                 </div>
               </div>
 
+              <!-- ═══ Следить за конторой (Ф7) ═══
+                   Источники контор: licensed_operators поста + brand/operator/licensed
+                   узлы эго-графа карточки (followOperatorTargets). Если контор нет —
+                   блок не показываем. Подтверждение — зелёный toast watchFollowNote. -->
+              <div x-show="followOperatorTargets.length" x-cloak
+                   class="rounded-card border border-line bg-canvas px-4 py-3">
+                <div class="flex items-center gap-2 mb-2.5">
+                  <i class="ph ph-binoculars text-[15px] text-ink"></i>
+                  <h3 class="section-h !mb-0">Следить за конторой</h3>
+                  <span class="text-[11px] text-muted normal-case font-normal tracking-normal">добавить оператора в непрерывный мониторинг</span>
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                  <template x-for="brand in followOperatorTargets" :key="brand">
+                    <button type="button" @click="followOperator(brand)" :disabled="followSaving"
+                            class="lift inline-flex items-center gap-1.5 px-3 py-1.5 rounded-soft border text-[12px] font-medium disabled:opacity-50"
+                            style="background:#EDF3EC;color:#346538;border-color:#CFE2D0"
+                            :title="'Следить за конторой: ' + brand">
+                      <i class="ph ph-binoculars text-[14px]"></i>
+                      <span x-text="'Следить за конторой: ' + brand"></span>
+                    </button>
+                  </template>
+                  <span x-show="followSaving" class="text-[12px] text-muted inline-flex items-center gap-1">
+                    <i class="ph ph-circle-notch animate-spin text-[13px]"></i> сохранение…
+                  </span>
+                </div>
+                <!-- зелёный toast-подтверждение -->
+                <div x-show="watchFollowNote" x-cloak
+                     class="rounded-soft border text-[12px] px-3 py-2 mt-2.5 flex items-start gap-2 reveal"
+                     style="background:#EDF3EC;color:#346538;border-color:#CFE2D0">
+                  <i class="ph ph-check-circle text-[14px] mt-px shrink-0"></i><span x-text="watchFollowNote"></span>
+                </div>
+              </div>
+
               <!-- recommendation strip -->
               <div class="flex flex-wrap items-center gap-3 rounded-card border border-line bg-canvas px-4 py-3">
                 <span class="badge-chip" :style="riskBadge(detail.score.risk)" x-text="actionLabel(detail.recommended_action)"></span>
                 <span class="badge-chip bg-surface text-muted border border-line" x-text="categoryLabel(detail.score.category)"></span>
+                <!-- статус «в очереди» -->
+                <span class="src-badge" x-show="detail.post.queued" title="Материал поставлен в очередь на разбор">
+                  <i class="ph ph-bookmark-simple text-[12px]"></i>
+                  <span>в очереди</span>
+                </span>
+                <!-- тоггл очереди для открытого материала -->
+                <button type="button" @click="toggleQueue(detail.post)" :disabled="queueSaving"
+                        :title="detail.post.queued ? 'Убрать материал из очереди' : 'Поставить материал в очередь'"
+                        class="lift ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-soft text-[12px] font-medium border disabled:opacity-50"
+                        :class="detail.post.queued ? 'bg-surface text-ink border-line hover:bg-canvas' : 'bg-ink text-white border-ink hover:opacity-90'">
+                  <i class="ph text-[14px]" :class="detail.post.queued ? 'ph-bookmark-simple-slash' : 'ph-bookmark-simple'"></i>
+                  <span x-text="detail.post.queued ? 'Убрать из очереди' : 'В очередь'"></span>
+                </button>
+                <!-- вторичный переход на оригинал: анализ первичен, оригинал — по необходимости -->
+                <a x-show="hasRealUrl(detail.post)" :href="detail.post.url" target="_blank" rel="noopener"
+                   class="lift inline-flex items-center gap-1.5 px-3 py-1.5 rounded-soft border border-line bg-surface text-[12px] text-muted hover:text-ink hover:bg-canvas">
+                  <i class="ph ph-arrow-square-out text-[14px]"></i> Открыть оригинал
+                </a>
                 <a :href="'/api/report/' + detail.post.id + '.pdf'" target="_blank" rel="noopener"
-                   class="lift ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-soft bg-ink text-white text-[12px] hover:opacity-90">
+                   class="lift inline-flex items-center gap-1.5 px-3 py-1.5 rounded-soft bg-ink text-white text-[12px] hover:opacity-90">
                   <i class="ph ph-file-pdf text-[15px]"></i> Экспорт дела (PDF)
                 </a>
               </div>
@@ -862,6 +1122,30 @@
                 </ul>
               </div>
 
+              <!-- ═══ Связи материала — мини-граф эго-сети поста ═══
+                   detail.graph: {nodes:[...], edges:[...]}. Узлов <=1 -> заглушка. -->
+              <div>
+                <h3 class="section-h">Связи материала</h3>
+                <p class="text-[11px] text-muted -mt-1.5 mb-2.5">со-посты по общим сущностям (бренды, каналы, реквизиты)</p>
+                <!-- есть связи: строим граф -->
+                <div x-show="detail.graph && detail.graph.nodes && detail.graph.nodes.length > 1">
+                  <div id="detailGraph" class="w-full h-[280px] rounded-card border border-line bg-surface overflow-hidden"></div>
+                  <div class="flex flex-wrap items-center gap-4 mt-2 text-[11px] text-muted">
+                    <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full" style="background:#9F2F2D"></span>эскалация ≥70</span>
+                    <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full" style="background:#956400"></span>на проверку 40–69</span>
+                    <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full" style="background:#346538"></span>чисто &lt;40</span>
+                    <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm" style="background:#C9C9C7"></span>сущность</span>
+                    <span>клик по узлу-посту открывает его разбор</span>
+                  </div>
+                </div>
+                <!-- нет связей: аккуратная заглушка, граф не строим -->
+                <div x-show="!(detail.graph && detail.graph.nodes && detail.graph.nodes.length > 1)"
+                     class="rounded-card border border-dashed border-line bg-surface px-4 py-6 text-center">
+                  <i class="ph ph-graph text-[22px] text-muted"></i>
+                  <p class="text-[12px] text-muted mt-1.5" x-text="detailGraphNote || 'Связей с другими материалами не найдено'"></p>
+                </div>
+              </div>
+
               <!-- explanation -->
               <div x-show="detail.explanation && detail.explanation.length">
                 <h3 class="section-h">Почему это опасно</h3>
@@ -902,6 +1186,12 @@
       <template x-if="graphError">
         <div role="alert" class="rounded-soft border border-[#F3D5D5] bg-[#FDEBEC] text-[#9F2F2D] text-[12px] px-3 py-2 mb-3 flex items-start gap-2"><i class="ph ph-warning-circle text-[14px] mt-px shrink-0"></i><span x-text="graphError"></span></div>
       </template>
+      <!-- зелёный toast-подтверждение «Следить за конторой» из графа (Ф7) -->
+      <div x-show="watchFollowNote" x-cloak
+           class="rounded-soft border text-[12px] px-3 py-2 mb-3 flex items-start gap-2 reveal"
+           style="background:#EDF3EC;color:#346538;border-color:#CFE2D0">
+        <i class="ph ph-check-circle text-[14px] mt-px shrink-0"></i><span x-text="watchFollowNote"></span>
+      </div>
       <div class="rounded-card border border-line bg-surface shadow-diffuse overflow-hidden relative">
         <!-- loading overlay -->
         <div x-show="graphLoading" x-cloak class="absolute inset-0 z-10 grid place-items-center bg-surface/70 backdrop-blur-[1px]">
@@ -917,7 +1207,7 @@
         <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full" style="background:#346538"></span>чисто &lt;40</span>
         <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm" style="background:#C9C9C7"></span>сущность</span>
         <span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full" style="background:transparent;border:2px solid #346538"></span>✓ разрешён в РК</span>
-        <span class="ml-2">клик по узлу-посту открывает разбор</span>
+        <span class="ml-2">клик по узлу-посту открывает разбор · клик по конторе (✓) ставит её на наблюдение</span>
       </div>
     </section>
 
@@ -982,6 +1272,42 @@
           </span>
         </div>
 
+        <!-- селектор фокуса: проблема/источник рекомендаций -->
+        <div class="flex flex-wrap items-end gap-3 mb-4">
+          <div>
+            <label class="filter-k">фокус рекомендаций</label>
+            <select x-model="recFocus" @change="loadRecommendations()"
+                    class="filter-select" style="max-width:280px"
+                    aria-label="Фокус рекомендаций — проблема или источник">
+              <option value="">Все проблемы (глобально)</option>
+              <optgroup label="Категории">
+                <template x-for="c in (recSources ? recSources.categories : [])" :key="'cat:' + c.id">
+                  <option :value="'category:' + c.id" x-text="c.label + ' (' + c.count + ')'"></option>
+                </template>
+              </optgroup>
+              <optgroup label="Конторы/бренды">
+                <template x-for="b in (recSources ? recSources.brands : [])" :key="'brand:' + b.id">
+                  <option :value="'brand:' + b.id" x-text="(b.licensed ? '✓ ' : '') + b.label + ' (' + b.count + ')'"></option>
+                </template>
+              </optgroup>
+              <optgroup label="Площадки">
+                <template x-for="p in (recSources ? recSources.platforms : [])" :key="'plat:' + p.id">
+                  <option :value="'platform:' + p.id" x-text="p.label + ' (' + p.count + ')'"></option>
+                </template>
+              </optgroup>
+            </select>
+          </div>
+          <!-- бейдж текущего фокуса с кнопкой сброса -->
+          <span x-show="recFocus" x-cloak class="badge-chip border bg-canvas text-ink border-line inline-flex items-center gap-1.5 mb-0.5">
+            <i class="ph ph-crosshair text-[12px]"></i>
+            <span>фокус: <span class="font-medium" x-text="recFocusLabel()"></span></span>
+            <button type="button" @click="recFocus = ''; loadRecommendations()" title="Сбросить фокус — вернуться к глобальным рекомендациям"
+                    class="lift -mr-0.5 ml-0.5 inline-grid place-items-center w-4 h-4 rounded-full hover:bg-line text-muted hover:text-ink">
+              <i class="ph ph-x text-[11px]"></i>
+            </button>
+          </span>
+        </div>
+
         <!-- error -->
         <template x-if="recsError">
           <div role="alert" class="rounded-soft border border-[#F3D5D5] bg-[#FDEBEC] text-[#9F2F2D] text-[12px] px-3 py-2 mb-3 flex items-start gap-2">
@@ -1041,26 +1367,46 @@
       <div class="col-span-12 lg:col-span-6 xl:col-span-5">
         <div class="rounded-card border border-line bg-surface shadow-diffuse p-6">
           <h2 class="text-[15px] font-semibold tracking-tight">Непрерывный мониторинг</h2>
-          <p class="text-[12px] text-muted mt-1">Каналы из этого списка периодически сканируются в фоне — новые посты автоматически попадают в очередь и оцениваются моделью.</p>
+          <p class="text-[12px] text-muted mt-1">Площадки и конторы из этого списка периодически сканируются в фоне — новые посты автоматически попадают в очередь и оцениваются моделью. Поддерживаются Telegram, YouTube, TikTok, Twitch, Kick, Instagram и конторы-операторы.</p>
 
-          <label class="section-h mt-5 block">Добавить канал</label>
-          <div class="flex gap-2">
-            <input x-model="watchInput" @keydown.enter="addWatch()" :disabled="watchAdding"
-                   aria-label="Telegram-канал для наблюдения"
-                   placeholder="@channel или t.me/channel"
-                   class="flex-1 bg-surface border border-line rounded-soft px-3 py-2 text-[13px] outline-none focus:border-muted disabled:opacity-50" />
-            <button @click="addWatch()" :disabled="watchAdding || !watchInput.trim()"
+          <!-- зелёный toast-подтверждение «Следить за конторой» (Ф7) -->
+          <template x-if="watchFollowNote">
+            <div class="rounded-soft border text-[12px] px-3 py-2 mt-4 flex items-start gap-2 reveal"
+                 style="background:#EDF3EC;color:#346538;border-color:#CFE2D0">
+              <i class="ph ph-check-circle text-[14px] mt-px shrink-0"></i><span x-text="watchFollowNote"></span>
+            </div>
+          </template>
+
+          <label class="section-h mt-5 block">Добавить площадку или контору</label>
+          <div class="flex flex-wrap gap-2">
+            <select x-model="watchPlatform" :disabled="watchAdding"
+                    aria-label="Площадка для наблюдения" class="filter-select shrink-0" style="max-width:200px">
+              <template x-for="p in watchPlatforms" :key="p.id">
+                <option :value="p.id" x-text="p.label"></option>
+              </template>
+            </select>
+            <input x-model="watchInput" @keydown.enter="addWatchEntry()" :disabled="watchAdding"
+                   aria-label="Аккаунт, ссылка или название конторы"
+                   placeholder="@аккаунт / ссылка / название конторы"
+                   class="flex-1 min-w-[180px] bg-surface border border-line rounded-soft px-3 py-2 text-[13px] outline-none focus:border-muted disabled:opacity-50" />
+            <button @click="addWatchEntry()" :disabled="watchAdding || !watchInput.trim()"
                     class="lift inline-flex items-center gap-2 px-3.5 py-2 rounded-soft bg-ink text-white text-[13px] font-medium hover:opacity-90 disabled:opacity-40">
               <i class="ph" :class="watchAdding ? 'ph-circle-notch animate-spin' : 'ph-plus'"></i>
               <span>Добавить</span>
             </button>
           </div>
 
-          <button @click="scanWatchlist()" :disabled="watchScanning || !watchlist.length"
+          <button @click="scanWatchlist()" :disabled="watchScanning || !watchEntries.length"
                   class="lift w-full mt-4 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-soft border border-line bg-canvas text-ink text-[13px] font-medium hover:bg-line/40 disabled:opacity-40">
             <i class="ph" :class="watchScanning ? 'ph-circle-notch animate-spin' : 'ph-arrows-clockwise'"></i>
             <span x-text="watchScanning ? 'Сканирование списка…' : 'Сканировать список сейчас'"></span>
           </button>
+
+          <template x-if="watchEntriesError">
+            <div role="alert" class="rounded-soft border border-[#F3D5D5] bg-[#FDEBEC] text-[#9F2F2D] text-[12px] px-3 py-2 mt-3 flex items-start gap-2">
+              <i class="ph ph-warning-circle text-[14px] mt-px shrink-0"></i><span x-text="watchEntriesError"></span>
+            </div>
+          </template>
 
           <template x-if="watchError">
             <div role="alert" class="rounded-soft border border-[#F3D5D5] bg-[#FDEBEC] text-[#9F2F2D] text-[12px] px-3 py-2 mt-3 flex items-start gap-2">
@@ -1077,18 +1423,19 @@
         </div>
       </div>
 
-      <!-- channels dashboard -->
+      <!-- multiplatform monitoring dashboard (Ф6) -->
       <div class="col-span-12 lg:col-span-6 xl:col-span-7">
         <div class="rounded-card border border-line bg-surface shadow-diffuse p-6 min-h-[260px]">
           <div class="flex items-center gap-2">
-            <h3 class="section-h !mb-0">Каналы под наблюдением <span class="font-mono tnum text-muted normal-case" x-text="'(' + watchlist.length + ')'"></span></h3>
-            <span x-show="watchStatsLoading" class="text-[11px] text-muted inline-flex items-center gap-1">
-              <i class="ph ph-circle-notch animate-spin text-[12px]"></i> пересчёт статистики
+            <h3 class="section-h !mb-0">Под наблюдением <span class="font-mono tnum text-muted normal-case" x-text="'(' + watchEntries.length + ')'"></span></h3>
+            <span x-show="watchEntriesLoading" class="text-[11px] text-muted inline-flex items-center gap-1">
+              <i class="ph ph-circle-notch animate-spin text-[12px]"></i> загрузка
             </span>
           </div>
-          <p class="text-[11px] text-muted mt-1">Список сканируется автоматически в фоне каждые ~10 мин.</p>
+          <p class="text-[11px] text-muted mt-1">Список сканируется автоматически в фоне каждые ~10 мин. Поддерживаются все площадки и конторы-операторы.</p>
 
-          <template x-if="watchLoading && !watchlist.length">
+          <!-- skeleton -->
+          <template x-if="watchEntriesLoading && !watchEntries.length">
             <div class="space-y-2 mt-3">
               <template x-for="i in 3" :key="i">
                 <div class="h-16 w-full rounded-soft skeleton"></div>
@@ -1096,48 +1443,65 @@
             </div>
           </template>
 
-          <template x-if="!watchLoading && !watchlist.length && !watchError">
+          <!-- empty -->
+          <template x-if="!watchEntriesLoading && !watchEntries.length && !watchEntriesError">
             <div class="rounded-card border border-dashed border-line bg-canvas p-8 text-center mt-3">
               <i class="ph ph-binoculars text-[24px] text-muted"></i>
               <p class="text-[13px] text-ink mt-2 font-medium">Список пуст</p>
-              <p class="text-[12px] text-muted mt-1">Добавьте Telegram-канал слева, чтобы начать непрерывное наблюдение.</p>
+              <p class="text-[12px] text-muted mt-1">Список пуст — добавьте площадку или контору слева.</p>
             </div>
           </template>
 
-          <ul class="space-y-2 mt-3" x-show="watchlist.length">
-            <template x-for="ch in watchlist" :key="ch">
+          <!-- entries -->
+          <ul class="space-y-2 mt-3" x-show="watchEntries.length">
+            <template x-for="entry in watchEntries" :key="entry.platform + ':' + entry.target">
               <li class="watch-row flex items-center gap-4 rounded-card border border-line bg-canvas px-4 py-3">
-                <i class="ph ph-telegram-logo text-[18px] text-muted shrink-0"></i>
+                <i :class="'ph ' + platformIcon(entry.platform) + ' text-[18px] text-muted shrink-0'"></i>
                 <div class="min-w-0 flex-1">
-                  <div class="flex items-center gap-2">
-                    <span class="font-mono text-[13px] text-ink truncate" x-text="ch"></span>
+                  <div class="flex items-center flex-wrap gap-2">
+                    <span class="font-mono text-[13px] text-ink truncate" x-text="entry.target"></span>
+                    <span class="src-badge">
+                      <i :class="'ph ' + platformIcon(entry.platform) + ' text-[11px]'"></i>
+                      <span x-text="platformLabel(entry.platform) || entry.platform"></span>
+                    </span>
+                    <span class="lic-badge" x-show="entry.licensed === true"
+                          title="Оператор лицензирован в РК — блокировка не требуется. Проверьте рекламные нормы.">
+                      <i class="ph ph-seal-check text-[12px]"></i><span>разрешён в РК</span>
+                    </span>
                     <span class="inline-flex items-center gap-1 text-[10px] text-[#346538]"
-                          x-show="watchStat(ch).lastScan" title="канал активно сканируется">
+                          x-show="entry.last_scan" title="запись активно сканируется">
                       <span class="live-dot"></span>активен
                     </span>
                   </div>
                   <div class="mt-2 flex flex-wrap items-start gap-x-6 gap-y-2">
                     <span class="stat-col">
-                      <span class="stat-k">скан</span>
-                      <span class="stat-v text-muted text-[12px]" x-text="watchStat(ch).lastScan ? relTime(watchStat(ch).lastScan) : 'не сканировался'"></span>
-                    </span>
-                    <span class="stat-col">
                       <span class="stat-k">собрано</span>
-                      <span class="stat-v font-mono tnum text-ink" x-text="watchStat(ch).collected"></span>
+                      <span class="stat-v font-mono tnum text-ink" x-text="entry.total_collected || 0"></span>
                     </span>
                     <span class="stat-col">
                       <span class="stat-k">флагнуто</span>
-                      <span class="stat-v font-mono tnum text-[#9F2F2D]" x-text="watchStat(ch).flagged"></span>
+                      <span class="stat-v font-mono tnum" style="color:#9F2F2D" x-text="entry.last_flagged || 0"></span>
+                    </span>
+                    <span class="stat-col">
+                      <span class="stat-k">скан</span>
+                      <span class="stat-v text-muted text-[12px]" x-text="entry.last_scan ? relTime(entry.last_scan) : 'не сканировался'"></span>
                     </span>
                   </div>
                 </div>
-                <button @click="removeWatch(ch)" title="Убрать из наблюдения" aria-label="Убрать канал из наблюдения"
+                <button @click="removeWatchEntry(entry.target, entry.platform)" title="Убрать из наблюдения" aria-label="Убрать из наблюдения"
                         class="lift grid place-items-center w-7 h-7 rounded-soft text-muted hover:text-[#9F2F2D] hover:bg-[#FDEBEC] shrink-0">
                   <i class="ph ph-x text-[14px]"></i>
                 </button>
               </li>
             </template>
           </ul>
+
+          <!-- error -->
+          <template x-if="watchEntriesError">
+            <div role="alert" class="rounded-soft border border-[#F3D5D5] bg-[#FDEBEC] text-[#9F2F2D] text-[12px] px-3 py-2 mt-3 flex items-start gap-2">
+              <i class="ph ph-warning-circle text-[14px] mt-px shrink-0"></i><span x-text="watchEntriesError"></span>
+            </div>
+          </template>
         </div>
       </div>
     </section>

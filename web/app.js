@@ -122,14 +122,27 @@ function kozApp() {
     // --- top bar ---
     macroF1: null,
 
+    // --- «Актуальные проблемы» (GET /api/hotspots) — самое опасное прямо сейчас ---
+    // {top_problems:[{category,label,count,avg_risk,escalate_count}],
+    //  top_operators:[{brand,count,avg_risk,licensed}],
+    //  top_telegram:[{channel,count,avg_risk}], top_youtube:[{channel,count,avg_risk}],
+    //  recommendations:[{title,rationale,action,priority,evidence,score}]}.
+    hotspots: null,
+    hotspotsLoading: false,
+    hotspotsError: "",
+
     // --- feed / queue ---
     feed: [],
     feedLoading: true,
     feedError: "",
     categoryFilter: "",
     platformFilter: "",
-    sortBy: "relevance",     // порядок очереди: relevance | novelty | popularity
+    sortBy: "relevance",     // порядок очереди: relevance | novelty | newest | popularity
     realOnly: true,          // ЛЕНТА defaults to real posts only (real_only=1)
+    actionFilter: "",        // уровень опасности: '' | escalate | review | clean (-> &action=)
+    licensedFilter: "all",   // легальность оператора: all | licensed | unlicensed (-> &licensed=)
+    sinceFilter: "",         // посты не старше этой даты публикации (ISO yyyy-mm-dd -> &since=)
+    queueSaving: false,      // POST /api/post/{id}/queue в полёте — блокирует двойные клики
     ticking: false,
     _knownIds: new Set(),
     _newIds: new Set(),
@@ -186,6 +199,29 @@ function kozApp() {
     watchStats: {},
     watchStatsLoading: false,
 
+    // --- мультиплатформенный мониторинг (Ф6) ---
+    // /api/watchlist/entries -> {entries:[{target,platform,last_scan,last_added,
+    //   last_flagged,total_collected,licensed:bool|null}], watched:[{target,platform}]}
+    watchEntries: [],
+    watchWatched: [],
+    watchEntriesLoading: false,
+    watchEntriesError: "",
+    watchPlatform: "telegram",  // выбранная площадка в форме добавления
+    watchPlatforms: [
+      { id: "telegram", label: "Telegram" },
+      { id: "youtube", label: "YouTube" },
+      { id: "tiktok", label: "TikTok" },
+      { id: "twitch", label: "Twitch" },
+      { id: "kick", label: "Kick" },
+      { id: "instagram", label: "Instagram" },
+      { id: "operator", label: "Контора (оператор)" },
+    ],
+
+    // --- «Следить за конторой» (Ф7) ---
+    watchFollowNote: "",   // зелёный toast-подтверждение
+    followSaving: false,   // POST в полёте — не дублируем
+    _followTimer: null,
+
     // --- drill-down ---
     detail: null,
     detailLoading: false,
@@ -222,6 +258,10 @@ function kozApp() {
     graphEmpty: false,
     _network: null,
 
+    // --- мини-граф связей в карточке анализа (отдельный экземпляр сети) ---
+    detailGraphNote: "",   // RU-текст заглушки, если граф не построить
+    _detailNetwork: null,
+
     // --- trends ---
     trends: null,
     trendsError: "",
@@ -235,6 +275,11 @@ function kozApp() {
     recsStats: null,
     recsLoading: false,
     recsError: "",
+    // селектор «проблемы и источники» рекомендаций (GET /api/recommendations/sources)
+    // {categories:[{id,label,count}], brands:[{id,label,count,licensed}], platforms:[{id,label,count}]}
+    recSources: null,
+    recSourcesLoaded: false,
+    recFocus: "",   // "" = глобально | "kind:value" (category:gambling | brand:1xbet | platform:tiktok)
 
     // --- live check (async job: POST /api/analyze -> {job_id}; poll /api/jobs/{id}) ---
     liveUrl: "",
@@ -251,6 +296,7 @@ function kozApp() {
     init() {
       this.loadMetrics();
       this.loadCatalog();
+      this.loadHotspots();
       this.loadFeed();
       this.loadFeedbackStats();
       this._pollTimer = setInterval(() => {
@@ -312,7 +358,8 @@ function kozApp() {
       if (id === "graph") this.$nextTick(() => this.loadGraph());
       if (id === "trends") this.$nextTick(() => this.loadTrends());
       if (id === "watch") {
-        this.loadWatchlist();
+        this.loadWatchEntries();   // основной мультиплатформенный дашборд (Ф6)
+        this.loadWatchlist();      // telegram-список как fallback/совместимость
         this.loadWatchStats();
       }
     },
@@ -329,12 +376,51 @@ function kozApp() {
       }
     },
 
+    // ===================================================== «Актуальные проблемы»
+    //
+    // GET /api/hotspots -> ВСЕГДА 5 ключей (списки могут быть пустыми):
+    //   {top_problems, top_operators, top_telegram, top_youtube, recommendations}.
+    // Авто-загрузка при открытии консоли (init) + кнопка «Обновить». Ошибку
+    // показываем в плашке (как другие fetch-методы), консоль не падает.
+    async loadHotspots() {
+      if (this.hotspotsLoading) return;
+      this.hotspotsLoading = true;
+      this.hotspotsError = "";
+      try {
+        const r = await fetch("/api/hotspots");
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        this.hotspots = await r.json();
+        this.$nextTick(() => observeReveals());
+      } catch (e) {
+        this.hotspotsError = "Не удалось загрузить актуальные проблемы: " + e.message;
+      } finally {
+        this.hotspotsLoading = false;
+      }
+    },
+
+    // Суммарно эскалаций по всем актуальным проблемам (Ф8: сводка-счётчик).
+    get hotspotsEscalateTotal() {
+      const probs = (this.hotspots && this.hotspots.top_problems) || [];
+      return probs.reduce((s, p) => s + (Number(p.escalate_count) || 0), 0);
+    },
+
+    // Бейдж/число avg_risk: округляем float и красим по зафиксированной палитре.
+    avgRiskBadge(risk) { return this.riskBadge(Math.round(Number(risk) || 0)); },
+
     // ===================================================== feed
     async loadFeed() {
       let url = "/api/feed?limit=100";
       if (this.realOnly) url += "&real_only=1";   // по умолчанию — только реальные посты
       if (this.categoryFilter) url += "&category=" + encodeURIComponent(this.categoryFilter);
       if (this.platformFilter) url += "&platform=" + encodeURIComponent(this.platformFilter);
+      // уровень опасности (рекомендованное действие) — отдельный фильтр
+      if (this.actionFilter) url += "&action=" + encodeURIComponent(this.actionFilter);
+      // легальность оператора — all не прокидываем (это дефолт бэка)
+      if (this.licensedFilter && this.licensedFilter !== "all") {
+        url += "&licensed=" + encodeURIComponent(this.licensedFilter);
+      }
+      // посты не старше выбранной даты публикации
+      if (this.sinceFilter) url += "&since=" + encodeURIComponent(this.sinceFilter);
       url += "&sort=" + encodeURIComponent(this.sortBy);
       try {
         const r = await fetch(url);
@@ -392,6 +478,38 @@ function kozApp() {
       this.realOnly = !this.realOnly;
       this.feedLoading = true;
       this.loadFeed();
+    },
+
+    // Поставить/снять пост в очередь на разбор.
+    // POST /api/post/{id}/queue {queued} -> {ok, post_id, queued}. Мутируем post.queued
+    // (Alpine реактивен), затем перезагружаем ленту, чтобы она отразила изменение
+    // (снятый из очереди пост пропадёт из ленты — это ожидаемо). queueSaving не даёт
+    // кликнуть дважды. В drill-down карточку НЕ сбрасываем — просто обновляем флаг.
+    async toggleQueue(post) {
+      if (this.queueSaving || !post || !post.id) return;
+      this.queueSaving = true;
+      const next = !post.queued;
+      try {
+        const r = await fetch("/api/post/" + encodeURIComponent(post.id) + "/queue", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ queued: next }),
+        });
+        if (!r.ok) {
+          let msg = "HTTP " + r.status;
+          try { const j = await r.json(); if (j.detail) msg = j.detail; } catch (_) {}
+          throw new Error(msg);
+        }
+        const data = await r.json();
+        // мутируем объект — Alpine увидит изменение и в ленте, и в drill-down
+        post.queued = typeof data.queued === "boolean" ? data.queued : next;
+        this.feedError = "";
+        await this.loadFeed(); // лента отражает изменение (снятый пост исчезнет)
+      } catch (e) {
+        this.feedError = "Не удалось изменить очередь: " + e.message;
+      } finally {
+        this.queueSaving = false;
+      }
     },
 
     // ===================================================== autonomous discovery
@@ -506,6 +624,9 @@ function kozApp() {
       this.selectedId = id;
       this.detailLoading = true;
       this.detail = null;
+      this.detailGraphNote = "";
+      // прошлый мини-граф уничтожаем сразу — карточка перерисовывается
+      if (this._detailNetwork) { this._detailNetwork.destroy(); this._detailNetwork = null; }
       try {
         const r = await fetch("/api/post/" + encodeURIComponent(id));
         if (!r.ok) throw new Error("HTTP " + r.status);
@@ -520,8 +641,85 @@ function kozApp() {
         this.verdictCategory = "gambling";
         this.verdictNote = "";
         this.verdictError = "";
-        this.$nextTick(() => observeReveals());
+        this.$nextTick(() => {
+          observeReveals();
+          // мини-граф связей строим после рендера карточки (когда detail установлен)
+          if (this.detail) this.renderDetailGraph();
+        });
       }
+    },
+
+    // Мини-граф связей материала (эго-сеть из detail.graph). ОТДЕЛЬНЫЙ экземпляр
+    // сети (_detailNetwork), чтобы не конфликтовать со вкладкой «Граф» (_network).
+    // По образцу loadGraph: та же риск-палитра для постов, белые box-узлы для
+    // сущностей, зелёная обводка + ✓ для лицензированных операторов. Клик по
+    // узлу-посту открывает его разбор. Если связей нет (<=1 узла) — тихо
+    // показываем заглушку и сеть не строим.
+    renderDetailGraph() {
+      // всегда уничтожаем прошлый мини-граф перед свежим построением
+      if (this._detailNetwork) { this._detailNetwork.destroy(); this._detailNetwork = null; }
+      // карточка закрыта — строить нечего
+      if (!this.detail) return;
+
+      const g = this.detail.graph;
+      // нет связей: заглушку показывает разметка (x-show), сеть не строим
+      if (!g || !g.nodes || g.nodes.length <= 1) return;
+
+      if (typeof vis === "undefined" || !vis.Network) {
+        this.detailGraphNote = "Библиотека графа недоступна (CDN заблокирован).";
+        return;
+      }
+      const el = document.getElementById("detailGraph");
+      if (!el) return;
+      el.innerHTML = "";
+
+      const nodes = g.nodes.map((n) => {
+        const isPost = n.type === "post";
+        const pal = RISK_PALETTE[riskTier(n.risk || 0)];
+        const lic = !!n.licensed;  // лицензированный в РК оператор — зелёная обводка + ✓
+        const base = isPost
+          ? { background: pal.net, border: pal.tx, highlight: { background: pal.net, border: "#111111" } }
+          : { background: "#FFFFFF", border: "#C9C9C7", highlight: { background: "#F1F1EF", border: "#787774" } };
+        if (lic) {
+          base.border = "#346538";
+          base.highlight = { background: base.background, border: "#346538" };
+        }
+        const ops = (n.licensed_operators || []).join(", ");
+        return {
+          id: n.id,
+          label: (lic ? "✓ " : "") + n.label,
+          shape: isPost ? "dot" : "box",
+          size: isPost ? 12 + Math.round((n.risk || 0) / 6) : 10,
+          color: base,
+          borderWidth: lic ? 3 : 1.5,
+          font: { color: isPost ? "#111111" : "#787774", size: 12, face: "Geist Sans, system-ui, sans-serif" },
+          title: lic
+            ? "Разрешён в РК" + (ops ? ": " + ops : "") + " — блокировка не требуется, проверить рекламные нормы"
+            : undefined,
+          _post: isPost ? n.id.replace(/^post:/, "") : null,
+        };
+      });
+      const edges = (g.edges || []).map((e) => ({
+        from: e.source,
+        to: e.target,
+        color: { color: "#EAEAEA", highlight: "#787774" },
+        width: 1,
+        smooth: { type: "continuous" },
+      }));
+
+      const data = { nodes: new vis.DataSet(nodes), edges: new vis.DataSet(edges) };
+      const options = {
+        interaction: { hover: true, tooltipDelay: 120 },
+        physics: { stabilization: true, barnesHut: { gravitationalConstant: -3500, springLength: 120 } },
+        nodes: { borderWidth: 1.5 },
+      };
+      this._detailNetwork = new vis.Network(el, data, options);
+
+      this._detailNetwork.on("click", (params) => {
+        if (!params.nodes.length) return;
+        const node = data.nodes.get(params.nodes[0]);
+        if (node && node._post) this.openPost(node._post);
+      });
     },
 
     // ===================================================== analyst verdict
@@ -749,9 +947,13 @@ function kozApp() {
             borderWidth: lic ? 3 : 1.5,
             font: { color: isPost ? "#111111" : "#787774", size: 12, face: "Geist Sans, system-ui, sans-serif" },
             title: lic
-              ? "Разрешён в РК" + (ops ? ": " + ops : "") + " — блокировка не требуется, проверить рекламные нормы"
+              ? "Разрешён в РК" + (ops ? ": " + ops : "") + " — блокировка не требуется, проверить рекламные нормы. Клик — следить за конторой."
               : undefined,
             _post: isPost ? n.id.replace(/^post:/, "") : null,
+            // узел-контора: licensed-оператор (надёжный сигнал) или type brand/operator.
+            // Клик по такому узлу добавляет контору в мониторинг (Ф7).
+            _brand: !isPost && (lic || ["brand", "operator"].includes(String(n.type || "").toLowerCase()))
+              ? n.label : null,
           };
         });
         const edges = (g.edges || []).map((e) => ({
@@ -775,8 +977,12 @@ function kozApp() {
           if (!params.nodes.length) return;
           const node = data.nodes.get(params.nodes[0]);
           if (node && node._post) {
+            // узел-пост: открыть разбор (прежнее поведение)
             this.tab = "feed";
             this.$nextTick(() => this.openPost(node._post));
+          } else if (node && node._brand) {
+            // узел-контора (licensed/brand/operator): следить за конторой (Ф7)
+            this.followOperator(node._brand);
           }
         });
       } catch (e) {
@@ -789,6 +995,7 @@ function kozApp() {
     async loadTrends() {
       this.trendsError = "";
       // превентивные рекомендации тянем параллельно — независимая панель
+      this.loadRecSources();      // доступные «проблемы и источники» для селектора (один раз)
       this.loadRecommendations();
       try {
         const r = await fetch("/api/trends");
@@ -811,12 +1018,36 @@ function kozApp() {
     //   recommendations:[{title, rationale, action, priority, evidence}]}.
     // Превентивные действия по выявленным трендам; рендерятся карточками внизу
     // вкладки «Тренды». Приоритет красит бейдж (high/medium/low — палитра риска).
+    // Доступные «проблемы и источники» для селектора фокуса. GET /api/recommendations/sources
+    // -> {categories, brands, platforms}. Тихо обрабатываем ошибку (как loadCatalog):
+    // селектор просто покажет только «Все проблемы». НЕ кидаем наверх.
+    async loadRecSources() {
+      if (this.recSourcesLoaded) return;
+      try {
+        const r = await fetch("/api/recommendations/sources");
+        if (!r.ok) return; // старый бэк/404 — оставляем пустой селектор
+        this.recSources = await r.json();
+        this.recSourcesLoaded = true;
+      } catch (_) {
+        /* offline / старый бэк — селектор показывает только «Все проблемы» */
+      }
+    },
+
+    // Сменить фокус рекомендаций и перезагрузить под выбор.
+    setRecFocus(value) {
+      this.recFocus = value;
+      this.loadRecommendations();
+    },
+
     async loadRecommendations() {
       if (this.recsLoading) return;
       this.recsLoading = true;
       this.recsError = "";
       try {
-        const r = await fetch("/api/recommendations");
+        // непустой recFocus -> ?focus=kind:value; пусто -> глобально (прежнее поведение)
+        let url = "/api/recommendations";
+        if (this.recFocus) url += "?focus=" + encodeURIComponent(this.recFocus);
+        const r = await fetch(url);
         if (!r.ok) throw new Error("HTTP " + r.status);
         const data = await r.json();
         this.recommendations = (data && data.recommendations) || [];
@@ -829,6 +1060,17 @@ function kozApp() {
       } finally {
         this.recsLoading = false;
       }
+    },
+
+    // Человекочитаемая метка текущего фокуса для бейджа («фокус: …»).
+    recFocusLabel() {
+      if (!this.recFocus || !this.recSources) return "";
+      const [kind, ...rest] = this.recFocus.split(":");
+      const id = rest.join(":");
+      const lists = { category: "categories", brand: "brands", platform: "platforms" };
+      const arr = (this.recSources[lists[kind]] || []);
+      const hit = arr.find((x) => String(x.id) === id);
+      return hit ? hit.label : id;
     },
 
     // Палитра бейджа приоритета (зафиксированная риск-палитра).
@@ -1154,13 +1396,157 @@ function kozApp() {
         const r = await fetch("/api/watchlist/scan", { method: "POST" });
         if (!r.ok) throw new Error("HTTP " + r.status);
         this.watchScanResult = await r.json();
-        await this.loadFeed();      // показать свежесканированные посты в ленте
-        await this.loadWatchStats(); // и пересчитать статистику дашборда
+        await this.loadFeed();        // показать свежесканированные посты в ленте
+        await this.loadWatchStats();  // пересчитать статистику telegram-дашборда
+        await this.loadWatchEntries(); // и обновить мультиплатформенную таблицу (Ф6)
       } catch (e) {
         this.watchError = "Сканирование списка не удалось: " + e.message;
       } finally {
         this.watchScanning = false;
       }
+    },
+
+    // ===================================================== мультиплатформенный мониторинг (Ф6)
+    //
+    // GET /api/watchlist/entries -> {entries:[...], watched:[...]}. entries несут
+    // статистику по каждой площадке/конторе (telegram|youtube|tiktok|twitch|kick|
+    // instagram|operator). Это ОСНОВНОЙ дашборд вкладки «Мониторинг».
+    async loadWatchEntries() {
+      this.watchEntriesLoading = true;
+      this.watchEntriesError = "";
+      try {
+        const r = await fetch("/api/watchlist/entries");
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const data = await r.json();
+        this.watchEntries = (data && data.entries) || [];
+        this.watchWatched = (data && data.watched) || [];
+        this.$nextTick(() => observeReveals());
+      } catch (e) {
+        this.watchEntriesError = "Не удалось загрузить мониторинг: " + e.message;
+      } finally {
+        this.watchEntriesLoading = false;
+      }
+    },
+
+    // Добавить площадку/контору: target из watchInput + выбранная watchPlatform.
+    // POST /api/watchlist {target, platform}. Переиспользуем флаг watchAdding,
+    // чтобы кнопка не срабатывала дважды.
+    async addWatchEntry() {
+      const target = (this.watchInput || "").trim();
+      if (!target) {
+        this.watchEntriesError = "Укажите аккаунт, ссылку или название конторы.";
+        return;
+      }
+      if (this.watchAdding) return;
+      this.watchAdding = true;
+      this.watchEntriesError = "";
+      const platform = this.watchPlatform || "telegram";
+      try {
+        const r = await fetch("/api/watchlist", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ target, platform }),
+        });
+        if (!r.ok) {
+          let msg = "HTTP " + r.status;
+          try { const j = await r.json(); if (j.detail) msg = j.detail; } catch (_) {}
+          throw new Error(msg);
+        }
+        this.watchInput = "";
+        await this.loadWatchEntries();
+        if (platform === "telegram") this.loadWatchlist(); // освежить старый telegram-список
+      } catch (e) {
+        this.watchEntriesError = "Не удалось добавить в мониторинг: " + e.message;
+      } finally {
+        this.watchAdding = false;
+      }
+    },
+
+    // Убрать запись из мониторинга. DELETE /api/watchlist/{target}?platform=<p>.
+    async removeWatchEntry(target, platform) {
+      this.watchEntriesError = "";
+      try {
+        const r = await fetch(
+          "/api/watchlist/" + encodeURIComponent(target) +
+            "?platform=" + encodeURIComponent(platform || "telegram"),
+          { method: "DELETE" }
+        );
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        await this.loadWatchEntries();
+        if ((platform || "telegram") === "telegram") this.loadWatchlist();
+      } catch (e) {
+        this.watchEntriesError = "Не удалось убрать из мониторинга: " + e.message;
+      }
+    },
+
+    // ===================================================== «Следить за конторой» (Ф7)
+    //
+    // Добавляет контору/бренд в мониторинг как оператора. POST /api/watchlist
+    // {target: brand, platform:"operator"}. Подтверждение — ненавязчивый зелёный
+    // toast (watchFollowNote), который гаснет через ~4 сек.
+    async followOperator(brand) {
+      const target = String(brand || "").trim();
+      if (!target) return;
+      if (this.followSaving) return;
+      this.followSaving = true;
+      this.watchFollowNote = "";
+      if (this._followTimer) { clearTimeout(this._followTimer); this._followTimer = null; }
+      try {
+        const r = await fetch("/api/watchlist", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ target, platform: "operator" }),
+        });
+        if (!r.ok) {
+          let msg = "HTTP " + r.status;
+          try { const j = await r.json(); if (j.detail) msg = j.detail; } catch (_) {}
+          throw new Error(msg);
+        }
+        this.watchFollowNote = "Контора «" + target + "» добавлена в мониторинг";
+        // если открыта вкладка мониторинга — освежим таблицу
+        if (this.tab === "watch") this.loadWatchEntries();
+      } catch (e) {
+        this.watchFollowNote = "Не удалось добавить контору: " + e.message;
+      } finally {
+        this.followSaving = false;
+        this._followTimer = setTimeout(() => { this.watchFollowNote = ""; }, 4000);
+      }
+    },
+
+    // Узлы графа/карточки, относящиеся к бренду/оператору («конторы»). Надёжный
+    // сигнал — node.licensed===true (лицензированные операторы из build.py). Тип
+    // 'brand'/'operator' у узлов-сущностей не гарантирован, поэтому ограничиваемся
+    // licensed-узлами + сам пост исключаем. Возвращает массив подписей брендов.
+    operatorNodesFromGraph(graph) {
+      const out = [];
+      const nodes = (graph && graph.nodes) || [];
+      for (const n of nodes) {
+        if (!n || n.type === "post") continue;
+        const t = String(n.type || "").toLowerCase();
+        const isOperator = !!n.licensed || t === "brand" || t === "operator";
+        if (isOperator && n.label) out.push(String(n.label));
+      }
+      return out;
+    },
+
+    // Список «контор» открытого материала для кнопок «Следить»: licensed_operators
+    // поста + бренд/оператор-узлы из эго-графа карточки. Дедуп по нижнему регистру.
+    get followOperatorTargets() {
+      if (!this.detail) return [];
+      const seen = new Set();
+      const out = [];
+      const push = (v) => {
+        const s = String(v || "").trim();
+        if (!s) return;
+        const k = s.toLowerCase();
+        if (seen.has(k)) return;
+        seen.add(k);
+        out.push(s);
+      };
+      const ops = (this.detail.post && this.detail.post.licensed_operators) || [];
+      ops.forEach(push);
+      this.operatorNodesFromGraph(this.detail.graph).forEach(push);
+      return out;
     },
 
     // Дашборд мониторинга: первичный источник — GET /api/watchlist/stats,
@@ -1249,6 +1635,8 @@ function kozApp() {
       const p = RISK_PALETTE[riskTier(r)];
       return `width:${r}%;background:${p.tx}`;
     },
+    // Тир риска как метод объекта (для шаблонов): escalate/review/clean.
+    riskTier(risk) { return riskTier(risk); },
     categoryLabel(c) { return CATEGORY_LABELS[c] || c; },
     actionLabel(a) { return ACTION_LABELS[a] || a; },
     // Компактное число просмотров: 1 234 → «1.2K», 3 400 000 → «3.4M».
