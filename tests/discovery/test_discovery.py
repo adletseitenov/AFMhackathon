@@ -549,6 +549,8 @@ def test_discover_live_none_when_nobody_in_air(tmp_path, monkeypatch):
     monkeypatch.setattr(discovery, "score_post", _fake_score)
     monkeypatch.setattr(discovery, "_KICK_SEED_STREAMERS", ["a", "b"])
     monkeypatch.setattr(streaming, "fetch_live", lambda platform, account: None)
+    # новый динамический источник живых Kick-эфиров тоже пуст (никто не в эфире)
+    monkeypatch.setattr(streaming, "search_kick_live", lambda *a, **k: [])
 
     res = discovery.discover(conn, per_query=1, search_yt=_fake_yt,
                              with_telegram=False, platform="kick",
@@ -619,3 +621,55 @@ def test_discover_sort_relevance_keeps_source_order(tmp_path, monkeypatch):
     order = [s["url"] for s in res["samples"]]
     assert order == ["https://www.tiktok.com/@promo/video/a",
                      "https://www.tiktok.com/@promo/video/b"]
+
+
+def test_discover_danger_band_filters_ingestion(tmp_path, monkeypatch):
+    """Фильтр УРОВНЯ ОПАСНОСТИ: min_risk/max_risk показывает ТОЛЬКО посты в полосе.
+
+    Высокорисковый казино-пост (risk 90) и низкорисковый (risk 10): при danger
+    high (70-100) в результаты/ленту попадает только казино-пост; низкорисковый
+    сохранён в БД, но НЕ раскрыт (не в ленте/результатах)."""
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "danger.db")
+    conn = db.connect(); db.init_db(conn)
+    monkeypatch.setattr(discovery, "score_post", _fake_score)
+
+    def _mixed_yt(q, limit):
+        return [
+            {"url": "http://yt/high", "caption": "лучшее казино занос", "platform": "youtube"},
+            {"url": "http://yt/low", "caption": "обычные новости погоды", "platform": "youtube"},
+        ]
+
+    res = discovery.discover(conn, queries=["q1"], per_query=2, search_yt=_mixed_yt,
+                             with_telegram=False, platform="youtube",
+                             min_risk=70, max_risk=100)
+    assert res["youtube_added"] == 1
+    assert [s["risk"] for s in res["samples"]] == [90]
+    assert res["min_risk"] == 70 and res["max_risk"] == 100
+    revealed_urls = {p.url for p in db.get_revealed_posts(conn)}
+    assert "http://yt/high" in revealed_urls
+    assert "http://yt/low" not in revealed_urls  # вне полосы -> не раскрыт
+
+
+def test_discover_kick_search_ingests_live_streams(tmp_path, monkeypatch):
+    """Динамический поиск живых Kick-эфиров: сид-аккаунты офлайн, но search_kick_live
+    находит живой казино-стрим -> он ингестится с флагом live и раскрывается."""
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "kicklive.db")
+    conn = db.connect(); db.init_db(conn)
+    monkeypatch.setattr(discovery, "score_post", _fake_score)
+    monkeypatch.setattr(discovery, "_KICK_SEED_STREAMERS", ["seed_off"])
+    monkeypatch.setattr(streaming, "fetch_live", lambda platform, account: None)
+    live_info = {
+        "url": "https://kick.com/casinoexile", "title": "casino slots big win",
+        "description": "casino slots big win", "author_handle": "casinoexile",
+        "thumb_url": "", "view_count": 173, "live": True,
+    }
+    monkeypatch.setattr(streaming, "search_kick_live", lambda *a, **k: [live_info])
+
+    res = discovery.discover(conn, per_query=1, search_yt=_fake_yt,
+                             with_telegram=False, platform="kick", content_type="live")
+    assert res["live_added"] == 1
+    live_samples = [s for s in res["samples"] if s.get("live")]
+    assert len(live_samples) == 1
+    assert live_samples[0]["url"] == "https://kick.com/casinoexile"
+    revealed = db.get_revealed_posts(conn)
+    assert any(p.url == "https://kick.com/casinoexile" and p.live for p in revealed)

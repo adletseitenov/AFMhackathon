@@ -46,6 +46,25 @@ async def api_discover(request: Request, payload: dict | None = Body(default=Non
     content_type = str(raw_ctype).lower().strip() if raw_ctype else "all"
     raw_sort = payload.get("sort")
     sort = str(raw_sort).lower().strip() if raw_sort else "relevance"
+    # УРОВЕНЬ ОПАСНОСТИ: именованная полоса danger ИЛИ явные min_risk/max_risk.
+    # danger: any(0-100) | high(70-100, эскалация) | medium(40-69, проверка) |
+    #         low(0-39, низкий/чисто). Явные min_risk/max_risk имеют приоритет.
+    _DANGER_BANDS = {
+        "any": (0, 100), "all": (0, 100),
+        "high": (70, 100), "escalate": (70, 100),
+        "medium": (40, 69), "review": (40, 69),
+        "low": (0, 39), "clean": (0, 39),
+    }
+    danger = str(payload.get("danger") or "any").lower().strip()
+    d_min, d_max = _DANGER_BANDS.get(danger, (0, 100))
+    try:
+        min_risk = int(payload["min_risk"]) if payload.get("min_risk") is not None else d_min
+    except (TypeError, ValueError):
+        min_risk = d_min
+    try:
+        max_risk = int(payload["max_risk"]) if payload.get("max_risk") is not None else d_max
+    except (TypeError, ValueError):
+        max_risk = d_max
 
     def _run(report):
         report("автономный поиск в интернете", 3)
@@ -56,6 +75,7 @@ async def api_discover(request: Request, payload: dict | None = Body(default=Non
                 with_telegram=bool(with_tg), platform=platform, deep=deep,
                 country=country, categories=categories,
                 content_type=content_type, sort=sort,
+                min_risk=min_risk, max_risk=max_risk,
                 report=report,
             )
         finally:

@@ -302,3 +302,51 @@ def fetch_live(platform: str, channel: str) -> "dict | None":
     if p == "instagram":
         return _fetch_live_ytdlp(f"https://www.instagram.com/{ch}/live", ch)
     return None
+
+
+# Гемблинг-запросы для динамического поиска ЖИВЫХ казино-стримов на Kick.
+_KICK_LIVE_SEARCH_TERMS = ("slots", "casino", "gambling", "stake")
+
+
+def search_kick_live(terms=None, per_term: int = 5, max_live: int = 6) -> list:
+    """Найти Kick-каналы по гемблинг-запросам и вернуть тех, кто СЕЙЧАС в ЭФИРЕ.
+
+    Зачем: проверка фиксированного списка сид-стримеров часто даёт 0 (никто из них
+    не в эфире прямо сейчас). Kick search API (api/search?searched_word=<term>) даёт
+    КАНДИДАТОВ по ключевым словам казино/слотов; для каждого проверяем эфир через
+    _fetch_live_kick (livestream != null). Так находим РЕАЛЬНЫЕ живые гемблинг-эфиры,
+    даже когда сид-аккаунты офлайн.
+
+    РОБАСТНА: [] при любой ошибке. Возврат — список нормализованных dict(live=True),
+    как у fetch_live: {url,title,description,author_handle,thumb_url,view_count,live}.
+    Ограничения: per_term кандидатов на запрос, не более max_live живых суммарно.
+    """
+    terms = terms or _KICK_LIVE_SEARCH_TERMS
+    out: list = []
+    seen: set = set()
+    try:
+        from curl_cffi import requests as creq
+    except Exception:
+        return []
+    for term in terms:
+        if len(out) >= max_live:
+            break
+        try:
+            resp = creq.get(
+                f"https://kick.com/api/search?searched_word={term}&type=channels",
+                impersonate="chrome", timeout=12,
+            )
+            chans = resp.json().get("channels") or []
+        except Exception:
+            continue
+        for c in chans[:per_term]:
+            if len(out) >= max_live:
+                break
+            slug = str((c or {}).get("slug") or "").strip().lstrip("@")
+            if not slug or slug in seen:
+                continue
+            seen.add(slug)
+            info = _fetch_live_kick(slug)  # подтверждает эфир + полные данные
+            if info:
+                out.append(info)
+    return out

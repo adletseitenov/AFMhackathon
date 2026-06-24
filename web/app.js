@@ -175,6 +175,7 @@ function kozApp() {
     discoverCategories: [],          // мульти-выбор (категории); []/['all'] = все
     discoverContentType: "all",      // all | video | live
     discoverSort: "relevance",       // relevance | recent | popular
+    discoverDanger: "any",           // any | high | medium | low — искать только этот уровень опасности
     catalogCountries: [{ id: "kz", label: "Казахстан" }, { id: "ru", label: "Россия" }, { id: "all", label: "Все страны" }],
     catalogCategories: [{ id: "all", label: "Все категории" }],
     catalogContentTypes: [{ id: "all", label: "Все" }, { id: "video", label: "VOD/посты" }, { id: "live", label: "Прямые эфиры" }],
@@ -547,6 +548,7 @@ function kozApp() {
             categories: this.discoverCategories,
             content_type: this.discoverContentType,
             sort: this.discoverSort,
+            danger: this.discoverDanger,
           }),
         });
         if (!r.ok) {
@@ -578,6 +580,17 @@ function kozApp() {
         if (!this._discoverJobId) return;
         try {
           const r = await fetch("/api/jobs/" + encodeURIComponent(this._discoverJobId));
+          if (r.status === 404) {
+            // Задача неизвестна серверу: чаще всего сервер перезапустили (реестр задач
+            // живёт в памяти). НЕ зависаем на красной ошибке — уже найденные посты
+            // сохранены в БД, обновляем ленту и мягко сообщаем.
+            this._stopDiscoverPoll();
+            this.discovering = false;
+            this.discoverError = "";
+            this.discoverResult = { note: "Поиск прерван (сервер перезапущён) — уже найденные посты в ленте ниже." };
+            await this.loadFeed();
+            return;
+          }
           if (!r.ok) throw new Error("HTTP " + r.status);
           const job = await r.json();
           this.discoverStage = job.stage || this.discoverStage || "поиск в интернете";
@@ -820,6 +833,13 @@ function kozApp() {
         if (!this._retrainJobId) return;
         try {
           const r = await fetch("/api/jobs/" + encodeURIComponent(this._retrainJobId));
+          if (r.status === 404) {
+            // задача неизвестна (сервер перезапущен) — не зависаем на ошибке поллинга
+            this._stopRetrainPoll();
+            this.retraining = false;
+            this.retrainError = "Переобучение прервано (сервер перезапущён). Запустите его заново.";
+            return;
+          }
           if (!r.ok) throw new Error("HTTP " + r.status);
           const job = await r.json();
           this.retrainStage = job.stage || this.retrainStage || "переобучение";
@@ -1262,6 +1282,13 @@ function kozApp() {
         if (!this._jobId) return;
         try {
           const r = await fetch("/api/jobs/" + encodeURIComponent(this._jobId));
+          if (r.status === 404) {
+            // задача неизвестна (сервер перезапущен) — не зависаем на ошибке поллинга
+            this._stopJobPoll();
+            this.liveLoading = false;
+            this.liveError = "Проверка прервана (сервер перезапущён). Запустите анализ ссылки заново.";
+            return;
+          }
           if (!r.ok) throw new Error("HTTP " + r.status);
           const job = await r.json();
           this.liveStage = job.stage || this.liveStage || "обработка";

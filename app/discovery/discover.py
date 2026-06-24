@@ -89,10 +89,16 @@ def _sort_items(items: list, sort: str) -> list:
     return items
 
 
-def _ingest(conn, post: Post, cap: str, score_text: "str | None" = None):
+def _ingest(conn, post: Post, cap: str, score_text: "str | None" = None,
+            min_risk: int = 0, max_risk: int = 100):
     """Ингест+скоринг поста. `cap` — отображаемый текст (caption), `score_text` —
     текст для скоринга (если None — равен cap). Для tiktok score_text включает
-    хэндл аккаунта, чтобы сработал сигнал бренда казино/букмекера."""
+    хэндл аккаунта, чтобы сработал сигнал бренда казино/букмекера.
+
+    Фильтр УРОВНЯ ОПАСНОСТИ: пост раскрывается (reveal -> попадает в ленту и в
+    результаты поиска) и возвращается его Score ТОЛЬКО если риск в выбранной полосе
+    [min_risk, max_risk]. Иначе пост сохранён в БД (фон его зафиксировал), но НЕ
+    раскрыт и функция возвращает None — вызывающий такой пост пропускает."""
     st = score_text if score_text is not None else cap
     ents = extract_entities(st)
     ex = Extracted(
@@ -102,6 +108,8 @@ def _ingest(conn, post: Post, cap: str, score_text: "str | None" = None):
     db.insert_post(conn, post)
     db.upsert_extracted(conn, ex)
     sc = score_post(post, ex, conn=conn)
+    if not (min_risk <= sc.risk <= max_risk):
+        return None  # вне выбранной полосы опасности — не раскрываем, не показываем
     db.reveal_post(conn, post.id)
     return sc
 
@@ -112,7 +120,8 @@ def _platform_accounts(platform: str) -> list:
 
 def _ingest_video_platform(conn, platform: str, accounts: list, per_account: int,
                            seen_urls: set, by_category: dict, samples: list,
-                           fresh_out: list, report=None, sort: str = "relevance") -> dict:
+                           fresh_out: list, report=None, sort: str = "relevance",
+                           min_risk: int = 0, max_risk: int = 100) -> dict:
     """Автопоиск опасных видео на tiktok/instagram через РЕАЛЬНЫЙ yt-dlp по
     курируемым аккаунтам казино/букмекеров (поисковики такие видео не индексируют).
 
@@ -159,9 +168,12 @@ def _ingest_video_platform(conn, platform: str, accounts: list, per_account: int
                 source="discovered", view_count=p.get("view_count") or 0,
             )
             try:
-                sc = _ingest(conn, post, cap, score_text=score_text)
+                sc = _ingest(conn, post, cap, score_text=score_text,
+                             min_risk=min_risk, max_risk=max_risk)
             except Exception:
                 continue
+            if sc is None:
+                continue  # вне выбранной полосы опасности
             added += 1
             if sc.category in by_category:
                 by_category[sc.category] += 1
@@ -191,7 +203,8 @@ def _fetch_streaming(platform: str, streamer: str, per_streamer: int) -> list:
 
 def _ingest_streaming(conn, platform: str, streamers: list, per_streamer: int,
                       seen_urls: set, by_category: dict, samples: list,
-                      fresh_out: list, report=None, sort: str = "relevance") -> dict:
+                      fresh_out: list, report=None, sort: str = "relevance",
+                      min_risk: int = 0, max_risk: int = 100) -> dict:
     """Автопоиск гемблинг-контента на TWITCH/KICK по курируемым стримерам казино/слотов.
 
     Для каждого стримера тянем VOD-ы (streaming_mod.fetch_kick_videos /
@@ -229,9 +242,12 @@ def _ingest_streaming(conn, platform: str, streamers: list, per_streamer: int,
                 source="discovered", view_count=v.get("view_count") or 0,
             )
             try:
-                sc = _ingest(conn, post, cap, score_text=score_text)
+                sc = _ingest(conn, post, cap, score_text=score_text,
+                             min_risk=min_risk, max_risk=max_risk)
             except Exception:
                 continue
+            if sc is None:
+                continue  # вне выбранной полосы опасности
             added += 1
             if sc.category in by_category:
                 by_category[sc.category] += 1
@@ -270,7 +286,7 @@ def _fetch_live(platform: str, account: str):
 
 def _ingest_live(conn, platform: str, accounts: list, seen_urls: set,
                  by_category: dict, samples: list, fresh_out: list,
-                 report=None) -> dict:
+                 report=None, min_risk: int = 0, max_risk: int = 100) -> dict:
     """Автопоиск ПРЯМЫХ ЭФИРОВ: для каждого сид-аккаунта зовём
     streaming_mod.fetch_live(platform, account); ингестим ТОЛЬКО тех, кто СЕЙЧАС в
     эфире (live=True). Пост помечается флагом live (в samples и fresh_out — модель
@@ -284,41 +300,56 @@ def _ingest_live(conn, platform: str, accounts: list, seen_urls: set,
         if report:
             report(f"{platform} эфир: {account}", 5 + int(70 * i / n))
         info = _fetch_live(platform, account)
-        # ингестим только тех, кто СЕЙЧАС в эфире (live=True) и у кого есть url.
-        if not isinstance(info, dict) or not info.get("live"):
-            continue
-        url = info.get("url")
-        if not url or url in seen_urls:
-            continue
-        seen_urls.add(url)
-        pid = _pid(platform, url)
-        if db.get_post(conn, pid) is not None:
-            continue
-        author = (info.get("author_handle") or account).lstrip("@")
-        title = info.get("title") or info.get("description") or ""
-        cap = normalize(title)
-        score_text = normalize(f"{author} {title}".strip())
-        post = Post(
-            id=pid, platform=platform, author_handle=author,
-            url=url, caption=cap,
-            posted_at=datetime.now(timezone.utc).isoformat(),
-            media_path=None, thumb_url=info.get("thumb_url") or None,
-            source="discovered", view_count=info.get("view_count") or 0,
-            live=True,
-        )
-        try:
-            sc = _ingest(conn, post, cap, score_text=score_text)
-        except Exception:
-            continue
-        added += 1
-        if sc.category in by_category:
-            by_category[sc.category] += 1
-        if sc.risk >= config.ESCALATE_THRESHOLD:
-            flagged += 1
-        fresh_out.append({"post": post, "risk": sc.risk, "live": True})
-        samples.append({"id": post.id, "url": post.url, "platform": platform, "risk": sc.risk,
-                        "category": sc.category, "live": True})
+        r = _ingest_one_live(conn, platform, info, account, seen_urls,
+                             by_category, samples, fresh_out, min_risk, max_risk)
+        added += r["added"]
+        flagged += r["flagged"]
     return {"added": added, "flagged": flagged}
+
+
+def _ingest_one_live(conn, platform: str, info, fallback_handle: str, seen_urls: set,
+                     by_category: dict, samples: list, fresh_out: list,
+                     min_risk: int = 0, max_risk: int = 100) -> dict:
+    """Ингест ОДНОГО live-инфо dict (от fetch_live ИЛИ search_kick_live).
+
+    Ингестим только тех, кто СЕЙЧАС в эфире (live=True) и у кого есть url; дедуп по
+    seen_urls + _pid + db.get_post; фильтр полосы опасности через _ingest. Пост
+    помечается флагом live. -> {"added","flagged"} (0/0 если офлайн/дубль/вне полосы)."""
+    if not isinstance(info, dict) or not info.get("live"):
+        return {"added": 0, "flagged": 0}
+    url = info.get("url")
+    if not url or url in seen_urls:
+        return {"added": 0, "flagged": 0}
+    seen_urls.add(url)
+    pid = _pid(platform, url)
+    if db.get_post(conn, pid) is not None:
+        return {"added": 0, "flagged": 0}
+    author = (info.get("author_handle") or fallback_handle or "").lstrip("@")
+    title = info.get("title") or info.get("description") or ""
+    cap = normalize(title)
+    score_text = normalize(f"{author} {title}".strip())
+    post = Post(
+        id=pid, platform=platform, author_handle=author,
+        url=url, caption=cap,
+        posted_at=datetime.now(timezone.utc).isoformat(),
+        media_path=None, thumb_url=info.get("thumb_url") or None,
+        source="discovered", view_count=info.get("view_count") or 0,
+        live=True,
+    )
+    try:
+        sc = _ingest(conn, post, cap, score_text=score_text,
+                     min_risk=min_risk, max_risk=max_risk)
+    except Exception:
+        return {"added": 0, "flagged": 0}
+    if sc is None:
+        return {"added": 0, "flagged": 0}  # вне выбранной полосы опасности
+    flagged = 1 if sc.risk >= config.ESCALATE_THRESHOLD else 0
+    if sc.category in by_category:
+        by_category[sc.category] += 1
+    fresh_out.append({"post": post, "risk": sc.risk, "live": True})
+    samples.append({"id": post.id, "url": post.url, "platform": platform, "risk": sc.risk,
+                    "category": sc.category, "live": True})
+    return {"added": 1, "flagged": flagged}
 
 
 def _deep_analyze(conn, fresh: list, deep_top: int, report=None) -> dict:
@@ -374,7 +405,8 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
              search_yt=None, with_telegram: bool = True, scan_tg=None,
              platform: str = "all", deep: bool = False, deep_top: int = 3,
              country: str = "all", categories=None,
-             content_type: str = "all", sort: str = "relevance") -> dict:
+             content_type: str = "all", sort: str = "relevance",
+             min_risk: int = 0, max_risk: int = 100) -> dict:
     """Автономный НАСТРАИВАЕМЫЙ поиск. search_yt/scan_tg инъектируются в тестах (без сети).
 
     platform: "all" (youtube+telegram), "youtube" (только ytsearch),
@@ -403,6 +435,18 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
     platform = (platform or "all").lower().strip()
     content_type = (content_type or "all").lower().strip()
     sort = (sort or "relevance").lower().strip()
+    # полоса УРОВНЯ ОПАСНОСТИ [min_risk, max_risk]: клампим в [0,100] и упорядочиваем.
+    # По умолчанию [0,100] -> фильтр выключен (поведение не меняется).
+    try:
+        min_risk = max(0, min(100, int(min_risk)))
+    except (TypeError, ValueError):
+        min_risk = 0
+    try:
+        max_risk = max(0, min(100, int(max_risk)))
+    except (TypeError, ValueError):
+        max_risk = 100
+    if min_risk > max_risk:
+        min_risk, max_risk = max_risk, min_risk
     added = flagged = tg_added = platform_added = 0
     samples: list = []
     fresh_yt: list = []  # свежедобавленные YouTube-посты для глубокого разбора
@@ -459,7 +503,9 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
                     media_path=None, thumb_url=it.get("thumb_url") or None, source="discovered",
                     view_count=it.get("view_count") or 0,
                 )
-                sc = _ingest(conn, post, cap)
+                sc = _ingest(conn, post, cap, min_risk=min_risk, max_risk=max_risk)
+                if sc is None:
+                    continue  # вне выбранной полосы опасности
                 added += 1
                 if sc.category in by_category:
                     by_category[sc.category] += 1
@@ -480,6 +526,7 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
         res = _ingest_video_platform(
             conn, platform, accounts, per_account,
             seen_urls, by_category, samples, fresh_platform, report=report, sort=sort,
+            min_risk=min_risk, max_risk=max_risk,
         )
         platform_added += res["added"]
         flagged += res["flagged"]
@@ -497,6 +544,7 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
         sres = _ingest_streaming(
             conn, platform, streamers, per_streamer,
             seen_urls, by_category, samples, fresh_streaming, report=report, sort=sort,
+            min_risk=min_risk, max_risk=max_risk,
         )
         platform_added += sres["added"]
         flagged += sres["flagged"]
@@ -511,10 +559,29 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
             lres = _ingest_live(
                 conn, lp, _live_accounts(lp),
                 seen_urls, by_category, samples, fresh_live, report=report,
+                min_risk=min_risk, max_risk=max_risk,
             )
             live_added += lres["added"]
             platform_added += lres["added"]
             flagged += lres["flagged"]
+        # ДИНАМИЧЕСКИЙ поиск ЖИВЫХ гемблинг-эфиров на Kick: сид-стримеры часто офлайн,
+        # а поиск по «слоты/казино/stake» находит тех, кто СЕЙЧАС в эфире (надёжный
+        # источник живых находок). Best-effort: любой сбой не валит автопоиск.
+        if "kick" in live_platforms:
+            if report:
+                report("kick: поиск живых казино-эфиров", 90)
+            try:
+                search_live = getattr(streaming_mod, "search_kick_live", None)
+                for info in (search_live() if search_live else []) or []:
+                    r = _ingest_one_live(
+                        conn, "kick", info, (info or {}).get("author_handle", ""),
+                        seen_urls, by_category, samples, fresh_live, min_risk, max_risk,
+                    )
+                    live_added += r["added"]
+                    platform_added += r["added"]
+                    flagged += r["flagged"]
+            except Exception:
+                pass
 
     # 2) Telegram — курируемые казино-каналы (надёжно) + DDG best-effort + СНЕЖНЫЙ КОМ
     #    по t.me-ссылкам в сообщениях: находит НОВЫЕ каналы И ЧАТЫ (не только каналы).
@@ -599,7 +666,16 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
         "categories": catalog._norm_categories(categories),
         "content_type": content_type, "sort": sort,
         "live_added": live_added,
+        # эхо выбранной полосы УРОВНЯ ОПАСНОСТИ (для UI/диагностики)
+        "min_risk": min_risk, "max_risk": max_risk,
     }
+    # Нота для активного фильтра опасности, когда в полосе ничего не нашли: это НЕ
+    # сбой — найденный контент просто вне выбранного уровня (он сохранён в фоне).
+    total_added = added + tg_added + platform_added
+    danger_active = (min_risk > 0) or (max_risk < 100)
+    if not note and danger_active and total_added == 0:
+        note = (f"По выбранному уровню опасности (риск {min_risk}–{max_risk}) новых находок нет. "
+                "Контент вне этого диапазона не показан — снимите фильтр опасности, чтобы увидеть всё.")
     if note:
         result["note"] = note
     return result

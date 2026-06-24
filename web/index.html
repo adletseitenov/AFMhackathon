@@ -360,6 +360,17 @@
               </template>
             </select>
           </div>
+          <!-- уровень опасности: искать только контент выбранной опасности -->
+          <div class="col-span-12 sm:col-span-6 lg:col-span-3">
+            <label class="filter-k">уровень опасности</label>
+            <select x-model="discoverDanger" :disabled="discovering"
+                    class="filter-select" aria-label="Уровень опасности для поиска">
+              <option value="any">Любая опасность</option>
+              <option value="high">🔴 Высокая (эскалация · риск 70+)</option>
+              <option value="medium">🟡 Средняя (проверка · риск 40–69)</option>
+              <option value="low">🟢 Низкая / чисто (риск 0–39)</option>
+            </select>
+          </div>
           <!-- сортировка -->
           <div class="col-span-12 sm:col-span-6 lg:col-span-3">
             <label class="filter-k">сортировка</label>
@@ -371,7 +382,7 @@
             </select>
           </div>
           <!-- категории (мульти-выбор чекбоксами) -->
-          <div class="col-span-12 lg:col-span-3">
+          <div class="col-span-12">
             <label class="filter-k">категории <span class="text-muted normal-case font-normal" x-show="!discoverCategories.length">— все</span></label>
             <div class="filter-chips" role="group" aria-label="Категории контента">
               <template x-for="cat in catalogCategories" :key="cat.id">
