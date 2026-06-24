@@ -89,6 +89,48 @@ async def _watchlist_loop() -> None:
             print(f"[watchlist] loop error: {e}")
 
 
+# Периодический АВТОНОМНЫЙ поиск опасных постов в интернете (YouTube ytsearch).
+DISCOVERY_INTERVAL_SEC = 1800
+
+
+def _discover_once() -> None:
+    """Один проход автономного поиска в отдельном потоке (своё соединение к БД)."""
+    try:
+        from app.discovery.discover import discover
+
+        wconn = db.connect()
+        try:
+            res = discover(wconn, with_telegram=False)  # YouTube; Telegram — через watchlist
+            if res.get("added"):
+                print(f"[discovery] +{res['added']} реальных постов, флаг {res.get('flagged', 0)}")
+        finally:
+            wconn.close()
+    except Exception as e:
+        print(f"[discovery] step error: {e}")
+
+
+async def _discovery_loop() -> None:
+    """Фоновый автономный поиск. Включается env KOZ_AUTO_DISCOVER=1 (по умолчанию ВЫКЛ —
+    тесты/офлайн не ходят в сеть; на боевом сервере run.bat включает)."""
+    import os
+
+    if os.environ.get("KOZ_AUTO_DISCOVER", "") != "1":
+        return
+    try:
+        await asyncio.sleep(8)  # первый проход вскоре после старта — лента сразу с реальными
+        await asyncio.get_event_loop().run_in_executor(None, _discover_once)
+    except asyncio.CancelledError:
+        return
+    while True:
+        try:
+            await asyncio.sleep(DISCOVERY_INTERVAL_SEC)
+            await asyncio.get_event_loop().run_in_executor(None, _discover_once)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"[discovery] loop error: {e}")
+
+
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     conn = db.connect()
@@ -103,12 +145,15 @@ async def lifespan(application: FastAPI):
     application.state.ticker = ticker
     watchlist_task = asyncio.create_task(_watchlist_loop())
     application.state.watchlist_task = watchlist_task
+    discovery_task = asyncio.create_task(_discovery_loop())
+    application.state.discovery_task = discovery_task
     try:
         yield
     finally:
-        for t in (ticker, watchlist_task):
+        tasks = (ticker, watchlist_task, discovery_task)
+        for t in tasks:
             t.cancel()
-        for t in (ticker, watchlist_task):
+        for t in tasks:
             try:
                 await t
             except asyncio.CancelledError:

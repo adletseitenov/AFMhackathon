@@ -71,6 +71,7 @@ def api_feed(
     min_risk: int = Query(0),
     category: "str | None" = Query(None),
     limit: int = Query(100),
+    real_only: int = Query(0),
 ):
     conn = request.app.state.db
     sql = (
@@ -82,6 +83,10 @@ def api_feed(
         "WHERE p.revealed = 1 AND s.risk >= ?"
     )
     params: list = [min_risk]
+    if real_only:
+        # только НАСТОЯЩИЕ посты: live-скан Telegram (source=live) и автономно
+        # найденные в интернете (source=discovered). seed-демо и синтетику скрываем.
+        sql += " AND p.source IN ('live', 'discovered')"
     if category:
         sql += " AND s.category = ?"
         params.append(category)
