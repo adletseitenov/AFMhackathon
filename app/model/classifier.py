@@ -17,6 +17,7 @@ import numpy as np
 
 from app.config import CATEGORIES, CLF_PATH
 from app.model.features import HANDCRAFTED_SIGNALS, build_features
+from app.model.normalize import normalize_obfuscated
 from app.models import Extracted, FeatureHit, Score
 
 # имя признака -> русская строка-доказательство (из реестра).
@@ -98,7 +99,10 @@ class RiskClassifier:
         return hits[:6]
 
     def predict(self, extracted: Extracted) -> Score:
-        text = _combined_text(extracted)
+        # F3 (анти-обфускация): TF-IDF-ветки потребляют НОРМАЛИЗОВАННЫЙ текст — той
+        # же функцией, что и train.py (см. train()._normalize_texts), чтобы train и
+        # inference видели одинаковый вход ('1 x b e t' -> '1xbet', 'kаzино' -> 'казино').
+        text = normalize_obfuscated(_combined_text(extracted))
         proba = self.pipeline.predict_proba([text])[0]
         classes = list(self.clf.classes_)
         class_probs = {c: float(proba[classes.index(c)]) for c in CATEGORIES}

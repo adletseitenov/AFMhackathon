@@ -15,6 +15,21 @@ DictVectorizer (см. features.HANDCRAFTED_SIGNALS). Обучается за с�
 `train()` загружает dataset.jsonl, делает стратифицированный split, обучает пайплайн,
 считает per-class precision/recall/F1 + confusion matrix, сохраняет clf.joblib и
 metrics.json. Возвращает dict метрик.
+
+F3 (анти-обфускация) — ВЫБОР НОРМАЛИЗАЦИИ: тексты прогоняются через
+`normalize_obfuscated` ОДИН РАЗ при подготовке обучающих данных (для TF-IDF-веток),
+а handcrafted-ветка (`_texts_to_signal_dicts` -> build_features) нормализует
+ВНУТРИ себя. На inference `RiskClassifier.predict` нормализует combined_text той же
+функцией перед `predict_proba`. Так train и inference видят ОДИНАКОВЫЙ вход — это
+сохраняет контракт «один сериализованный Pipeline», а ретрейн пересобирает словари
+TF-IDF уже по нормализованной поверхности. (Двойная нормализация в hand-ветке
+безвредна — normalize_obfuscated идемпотентна.)
+
+ACTIVE-LEARNING HOOK (контракт с verdict-агентом): если существует
+`data/analyst_labels.jsonl` (по одному JSON-объекту на строку:
+{"text": <str>, "label": <одна из CATEGORIES>}), его строки ДОБАВЛЯЮТСЯ к
+обучающим данным перед обучением. Файл отсутствует -> поведение как раньше.
+Битые/неполные строки молча пропускаются.
 """
 
 import json
@@ -38,6 +53,7 @@ from app.config import CATEGORIES, CLF_PATH, DATASET_PATH, METRICS_PATH
 # иначе при запуске train.py как `python -m app.model.train` joblib запишет ссылку
 # на __main__._texts_to_signal_dicts и артефакт не загрузится в uvicorn/pytest.
 from app.model.features import _texts_to_signal_dicts
+from app.model.normalize import normalize_obfuscated
 
 
 def build_pipeline() -> Pipeline:
@@ -77,6 +93,10 @@ def build_pipeline() -> Pipeline:
     return Pipeline(steps=[("features", features), ("clf", clf)])
 
 
+# Контракт active-learning: аналитические метки рядом с dataset.jsonl.
+ANALYST_LABELS_PATH = DATASET_PATH.parent / "analyst_labels.jsonl"
+
+
 def _load_dataset():
     rows = []
     with open(DATASET_PATH, encoding="utf-8") as f:
@@ -87,10 +107,50 @@ def _load_dataset():
     return rows
 
 
+def _load_analyst_labels(path=ANALYST_LABELS_PATH):
+    """Active-learning hook: дочитывает размеченные аналитиком строки, если файл есть.
+
+    Формат: по одному JSON-объекту на строку {"text": <str>, "label": <CATEGORY>}.
+    Файл отсутствует -> []. Битые/неполные/несоответствующие строки молча пропускаем
+    (надёжность: один кривой JSON не должен валить обучение модели).
+    """
+    if not path.exists():
+        return []
+    rows = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+                text = obj.get("text")
+                label = obj.get("label")
+                if not isinstance(text, str) or not text.strip():
+                    continue
+                if label not in CATEGORIES:
+                    continue
+                rows.append({"text": text, "label": label,
+                             "lang": obj.get("lang", "ru")})
+    except OSError:
+        return []
+    return rows
+
+
 def train():
     """Обучает пайплайн, сохраняет артефакты, возвращает dict метрик."""
     rows = _load_dataset()
-    texts = [r["text"] for r in rows]
+    # Active-learning: дочитываем аналитические метки (если файл есть) и дописываем
+    # их к обучающим данным ПЕРЕД обучением (контракт с verdict-агентом).
+    rows = rows + _load_analyst_labels()
+    # F3 (анти-обфускация): нормализуем поверхность текста ОДИН раз для TF-IDF-веток.
+    # build_features в hand-ветке тоже нормализует (идемпотентно), inference — тоже.
+    texts = [normalize_obfuscated(r["text"]) for r in rows]
     labels = [r["label"] for r in rows]
     X = np.asarray(texts, dtype=object)
     y = np.asarray(labels)

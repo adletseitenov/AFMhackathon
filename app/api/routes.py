@@ -139,7 +139,7 @@ def api_post_detail(request: Request, post_id: str):
         "post": _post_dict(p),
         "extracted": asdict(e) if e is not None else None,
         "score": asdict(score) if score is not None else None,
-        "explanation": explain(score, entities) if score is not None else [],
+        "explanation": explain(score, entities, e) if score is not None else [],
         "recommended_action": s["recommended_action"] if s is not None else None,
     }
 
@@ -256,7 +256,7 @@ async def api_analyze(request: Request):
             "post": asdict(post),
             "extracted": asdict(extracted),
             "score": asdict(score),
-            "explanation": explain(score, extracted.entities),
+            "explanation": explain(score, extracted.entities, extracted),
             "recommended_action": action,
         }
         if note:

@@ -20,6 +20,7 @@
     evidence, value могут быть None/пустыми.
 """
 
+from app.model.normalize import preview as _normalized_preview
 from app.models import Entity, Score
 
 # Максимум буллетов в объяснении (criterion: концизность).
@@ -41,6 +42,7 @@ _FEATURE_LABELS = {
     "kz_gambling_kz_lang": "Казахскоязычная лексика азартных игр",
     "kz_pyramid_tenge": "Инвестиционные обещания в тенге",
     "kz_local_bookmaker": "Кириллическое написание букмекера/HYIP-бренда",
+    "public_figure_impersonation": "Эксплуатация имени публичной фигуры РК (ложный «эндорсмент»)",
 }
 
 # Русские метки для заметных извлечённых сущностей (Entity.type из extract_entities).
@@ -67,12 +69,17 @@ def _feature_weight(fh) -> float:
         return 0.0
 
 
-def explain(score: Score, entities: list[Entity]) -> list[str]:
+def explain(score: Score, entities: list[Entity], extracted=None) -> list[str]:
     """Список русских буллетов-причин (богатый, ранжированный, кратко ≤ MAX_BULLETS).
 
     Перечисляет ВСЕ сработавшие handcrafted-сигналы по убыванию |weight| с уликами,
     затем добавляет заметные сущности как фактические подтверждения. Для clean-постов
     без сигналов и сущностей — пустой список. Никогда не выбрасывает исключение.
+
+    F3 (анти-обфускация): если передан `extracted` (или строка) и в нём обнаружена
+    обфускация (разрядка/гомоглифы/литспик отличают нормализованный текст от исходного),
+    добавляем короткий буллет с НОРМАЛИЗОВАННЫМ предпросмотром — чтобы аналитик/UI
+    видели, что детектор «развернул» «1 x b e t»/«kаzино» обратно в канон. Crash-safe.
     """
     bullets: list[str] = []
     seen: set[str] = set()
@@ -118,4 +125,55 @@ def explain(score: Score, entities: list[Entity]) -> list[str]:
         keep = max(MAX_BULLETS, len(feature_hits))
         bullets = bullets[:keep]
 
+    # 3) F3: нормализованный предпросмотр (только если ввод был обфусцирован).
+    norm_bullet = _normalized_evidence_bullet(extracted)
+    if norm_bullet and norm_bullet not in seen:
+        bullets.append(norm_bullet)
+
     return bullets
+
+
+def _raw_text(extracted) -> str:
+    """Достаёт исходный текст из Extracted/строки/None (crash-safe)."""
+    if extracted is None:
+        return ""
+    if isinstance(extracted, str):
+        return extracted
+    # Extracted dataclass: combined_text или склейка полей.
+    try:
+        combined = getattr(extracted, "combined_text", None)
+        if combined:
+            return combined
+        parts = [
+            getattr(extracted, "caption", "") or "",
+            getattr(extracted, "transcript", "") or "",
+            getattr(extracted, "ocr_text", "") or "",
+        ]
+        return " ".join(parts).strip()
+    except Exception:
+        return ""
+
+
+def _normalized_evidence_bullet(extracted) -> str:
+    """Буллет с нормализованным предпросмотром, ТОЛЬКО если текст был обфусцирован.
+
+    «Обфусцирован» = нормализованная форма заметно отличается от просто-lowercase
+    исходника (разрядка/гомоглифы/литспик «развернулись»). Если разницы нет — буллет
+    не добавляем, чтобы не шуметь на чистых постах. Никогда не падает.
+    """
+    try:
+        raw = _raw_text(extracted)
+        if not raw or not raw.strip():
+            return ""
+        norm = _normalized_preview(raw)
+        if not norm:
+            return ""
+        # Сравниваем с «наивным» lowercase+схлопывание пробелов исходника: если
+        # нормализатор реально что-то изменил (свернул разрядку/гомоглиф/литспик) —
+        # это сигнал маскировки, который стоит показать аналитику.
+        naive = " ".join(raw.lower().split())
+        if norm.replace(" ", "") == naive.replace(" ", ""):
+            return ""
+        return f"Обнаружена маскировка текста, нормализовано: «{norm}»"
+    except Exception:
+        return ""

@@ -10,6 +10,8 @@
 
 import re
 
+from app.model import public_figures
+from app.model.normalize import normalize_obfuscated
 from app.models import Extracted
 
 # Каждый сигнал: name (ключ признака), pattern (скомпилированный regex, re.I|re.U),
@@ -164,6 +166,9 @@ HANDCRAFTED_SIGNALS = [
         "name": "kz_local_bookmaker",
         "pattern": re.compile(
             r"(1\s*х\s*бет|1хбет|1\s*x\s*ставка|1хставка|"
+            # после анти-обфускации '1 x b e t'/'1xbet' сворачиваются в '1хвет'
+            # (b->в гомоглиф), а '1xб3т'->'1хбет'; ловим обе нормализованные формы:
+            r"1хвет|1хбет|"
             r"мел\s*бет|мелбет|мост\s*бет|мостбет|"
             r"пин\s*[-\s]?\s*ап|пинап|"
             r"1\s*вин\b|"
@@ -174,6 +179,15 @@ HANDCRAFTED_SIGNALS = [
         ),
         "category_hint": "gambling",
         "evidence_ru": "Кириллическое написание нелегального букмекера/казино или HYIP-бренда (1хбет, мелбет, Финико)",
+    },
+    {
+        # F10 — импесонация публичной фигуры. pattern=None: вычисляется в build_features
+        # газеттиром public_figures.match() по НОРМАЛИЗОВАННОМУ тексту (как visual_gambling
+        # берётся из visual_concepts). НЕ переименовывать/не удалять существующие ключи.
+        "name": "public_figure_impersonation",
+        "pattern": None,
+        "category_hint": "fraud",
+        "evidence_ru": "Эксплуатация имени известной публичной фигуры РК (ложный «эндорсмент»)",
     },
 ]
 
@@ -194,17 +208,31 @@ def _combined(extracted: Extracted) -> str:
     ).strip()
 
 
+def normalized_text(extracted: Extracted) -> str:
+    """Нормализованная (анти-обфускация) КОПИЯ всего текста поста для матчинга.
+
+    Маленький хелпер, чтобы тот же нормализованный текст можно было поднять в
+    объяснение/UI (см. app.decision.explain). Не разрушает исходный отображаемый
+    текст — это отдельная копия для сопоставления сигналов.
+    """
+    return normalize_obfuscated(_combined(extracted))
+
+
 def build_features(extracted: Extracted) -> dict:
     """Бинарные инженерные признаки по всему доступному тексту/визуалу поста.
 
     Возвращает dict {signal_name: int} c РОВНО одним ключом на каждую запись
-    HANDCRAFTED_SIGNALS (включая `visual_gambling`). Этот dict скармливается
-    DictVectorizer в составе FeatureUnion (см. train.py).
+    HANDCRAFTED_SIGNALS (включая `visual_gambling` и `public_figure_impersonation`).
+    Этот dict скармливается DictVectorizer в составе FeatureUnion (см. train.py).
+
+    F3 (анти-обфускация): regex-сигналы матчатся по НОРМАЛИЗОВАННОМУ тексту
+    (normalize_obfuscated), поэтому срабатывают на «1 x b e t», «kаzино», «1xб3т».
     """
-    text = _combined(extracted)
+    text = normalized_text(extracted)
     feats: dict = {}
     for sig in HANDCRAFTED_SIGNALS:
-        if sig["name"] == "visual_gambling":
+        name = sig["name"]
+        if name == "visual_gambling":
             feats["visual_gambling"] = (
                 1
                 if any(
@@ -213,7 +241,11 @@ def build_features(extracted: Extracted) -> dict:
                 else 0
             )
             continue
-        feats[sig["name"]] = 1 if sig["pattern"].search(text) else 0
+        if name == "public_figure_impersonation":
+            # F10 — газеттир публичных фигур по нормализованному тексту.
+            feats["public_figure_impersonation"] = 1 if public_figures.matches(text) else 0
+            continue
+        feats[name] = 1 if sig["pattern"].search(text) else 0
     return feats
 
 

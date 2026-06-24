@@ -88,6 +88,21 @@
                 x-text="macroF1 === null ? '—' : macroF1.toFixed(2)"></span>
         </div>
         <div class="h-4 w-px bg-line"></div>
+        <!-- обучение модели: размечено N · до переобучения M -->
+        <div class="flex items-center gap-2" x-show="fbStats" x-cloak
+             title="Метки аналитиков накапливаются для дообучения собственной модели">
+          <span class="text-muted">обучение</span>
+          <span class="font-mono font-medium tnum px-2 py-0.5 rounded-full bg-canvas border border-line">
+            размечено <span x-text="fbStats ? fbStats.total_labels : 0"></span>
+            <span class="text-muted">· до переобучения <span x-text="fbStats ? fbStats.labels_until_retrain : 0"></span></span>
+          </span>
+          <button @click="retrain()" :disabled="retraining" title="Переобучить модель на накопленных метках"
+                  class="lift inline-flex items-center gap-1.5 px-2 py-0.5 rounded-soft border border-line bg-surface text-ink hover:bg-canvas disabled:opacity-50">
+            <i class="ph text-[13px]" :class="retraining ? 'ph-circle-notch animate-spin' : 'ph-arrows-clockwise'"></i>
+            <span x-text="retraining ? 'Обучение…' : 'Переобучить'"></span>
+          </button>
+        </div>
+        <div class="h-4 w-px bg-line"></div>
         <div class="flex items-center gap-2">
           <span class="text-muted">в очереди</span>
           <span class="font-mono font-medium tnum" x-text="feed.length"></span>
@@ -207,6 +222,51 @@
         </template>
       </section>
 
+      <!-- ===== Обучение модели: прогресс / результат переобучения ===== -->
+      <template x-if="retraining || retrainError || retrainResult">
+        <div class="rounded-card border border-line bg-surface shadow-diffuse p-4" aria-label="Переобучение модели">
+          <!-- live progress -->
+          <template x-if="retraining">
+            <div class="space-y-2">
+              <div class="flex items-center gap-2 text-[12px] text-muted">
+                <i class="ph ph-circle-notch animate-spin text-[14px] text-ink"></i>
+                <span>Переобучение модели · этап: <span class="text-ink" x-text="retrainStage || 'инициализация'"></span></span>
+                <span class="ml-auto font-mono tnum text-ink" x-text="retrainProgress + '%'"></span>
+              </div>
+              <div class="h-2 w-full rounded-full bg-canvas overflow-hidden border border-line">
+                <div class="h-full rounded-full bg-ink transition-[width] duration-500 ease-out"
+                     :style="'width:' + Math.max(4, Math.min(100, retrainProgress)) + '%'"></div>
+              </div>
+            </div>
+          </template>
+
+          <!-- error -->
+          <template x-if="retrainError && !retraining">
+            <div role="alert" class="rounded-soft border border-[#F3D5D5] bg-[#FDEBEC] text-[#9F2F2D] text-[12px] px-3 py-2 flex items-start gap-2">
+              <i class="ph ph-warning-circle text-[14px] mt-px shrink-0"></i><span x-text="retrainError"></span>
+            </div>
+          </template>
+
+          <!-- result: было F1 X.XX → стало Y.YY (Δ) -->
+          <template x-if="retrainResult && !retraining">
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[13px] reveal">
+              <i class="ph ph-check-circle text-[#346538] text-[16px]"></i>
+              <span class="font-medium">Модель переобучена</span>
+              <span class="text-muted">было F1
+                <span class="font-mono tnum text-ink" x-text="retrainResult.before === null ? '—' : retrainResult.before.toFixed(2)"></span>
+                → стало
+                <span class="font-mono tnum text-ink" x-text="retrainResult.after === null ? '—' : retrainResult.after.toFixed(2)"></span>
+              </span>
+              <span class="badge-chip border"
+                    :style="retrainResult.delta > 0 ? 'background:#EDF3EC;color:#346538' : (retrainResult.delta < 0 ? 'background:#FDEBEC;color:#9F2F2D' : 'background:#FBF3DB;color:#956400')"
+                    x-show="retrainResult.delta !== null"
+                    x-text="deltaLabel(retrainResult.delta)"></span>
+              <span class="text-muted">на <span class="font-mono tnum text-ink" x-text="retrainResult.total_labels"></span> метках</span>
+            </div>
+          </template>
+        </div>
+      </template>
+
       <!-- Telegram scanner: real network fetch of a public channel -->
       <div class="rounded-card border border-line bg-surface shadow-diffuse p-4">
         <div class="flex flex-wrap items-center gap-3">
@@ -261,7 +321,18 @@
 
       <!-- Left: priority queue -->
       <div class="col-span-12 lg:col-span-5 xl:col-span-4">
-        <div class="flex flex-wrap items-center gap-3 mb-3">
+        <!-- sub-tabs: приоритетная очередь | на грани (uncertainty) -->
+        <div class="seg mb-3" role="group" aria-label="Режим ленты">
+          <button type="button" @click="setFeedMode('queue')"
+                  :class="feedMode === 'queue' ? 'is-on' : ''"
+                  :aria-pressed="feedMode === 'queue'">Очередь</button>
+          <button type="button" @click="setFeedMode('uncertain')"
+                  :class="feedMode === 'uncertain' ? 'is-on' : ''"
+                  :aria-pressed="feedMode === 'uncertain'"
+                  title="Материалы у порога 40/70 — самые ценные для разметки">На грани</button>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-3 mb-3" x-show="feedMode === 'queue'">
           <h2 class="text-[13px] font-semibold uppercase tracking-wide text-muted">Приоритетная очередь</h2>
           <label class="ml-auto inline-flex items-center gap-1.5 text-[12px] text-muted cursor-pointer select-none"
                  title="Показывать только реальные посты (без демо-затравки)">
@@ -291,15 +362,41 @@
           </button>
         </div>
 
+        <!-- «На грани» header -->
+        <div class="flex flex-wrap items-center gap-3 mb-3" x-show="feedMode === 'uncertain'">
+          <h2 class="text-[13px] font-semibold uppercase tracking-wide text-muted">На грани</h2>
+          <span class="text-[11px] text-muted">материалы у порога 40/70 — наиболее ценны для разметки</span>
+          <button @click="loadUncertain()" :disabled="uncertainLoading" title="Обновить список"
+                  class="lift ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-soft border border-line bg-surface text-[12px] text-ink hover:bg-canvas disabled:opacity-50">
+            <i class="ph text-[14px]" :class="uncertainLoading ? 'ph-circle-notch animate-spin' : 'ph-arrows-clockwise'"></i><span x-text="uncertainLoading ? '…' : 'Обновить'"></span>
+          </button>
+        </div>
+
+        <!-- error (uncertain) -->
+        <template x-if="feedMode === 'uncertain' && uncertainError">
+          <div role="alert" class="rounded-soft border border-[#F3D5D5] bg-[#FDEBEC] text-[#9F2F2D] text-[12px] px-3 py-2 mb-3 flex items-start gap-2">
+            <i class="ph ph-warning-circle text-[14px] mt-px shrink-0"></i><span x-text="uncertainError"></span>
+          </div>
+        </template>
+
+        <!-- empty (uncertain) -->
+        <template x-if="feedMode === 'uncertain' && !uncertainLoading && !uncertain.length && !uncertainError">
+          <div class="rounded-card border border-dashed border-line bg-surface p-8 text-center mb-3">
+            <i class="ph ph-scales text-[26px] text-muted"></i>
+            <p class="text-[13px] text-ink mt-2 font-medium">Пограничных материалов нет</p>
+            <p class="text-[12px] text-muted mt-1">Когда появятся посты у порога 40/70, они окажутся здесь.</p>
+          </div>
+        </template>
+
         <!-- error -->
-        <template x-if="feedError">
+        <template x-if="feedMode === 'queue' && feedError">
           <div role="alert" class="rounded-soft border border-[#F3D5D5] bg-[#FDEBEC] text-[#9F2F2D] text-[12px] px-3 py-2 mb-3 flex items-start gap-2">
             <i class="ph ph-warning-circle text-[14px] mt-px shrink-0"></i><span x-text="feedError"></span>
           </div>
         </template>
 
         <!-- skeletons -->
-        <template x-if="feedLoading && !feed.length">
+        <template x-if="feedMode === 'queue' && feedLoading && !feed.length">
           <div class="space-y-2.5">
             <template x-for="i in 5" :key="i">
               <div class="rounded-card border border-line bg-surface p-3.5">
@@ -315,7 +412,7 @@
         </template>
 
         <!-- empty -->
-        <template x-if="!feedLoading && !feed.length && !feedError">
+        <template x-if="feedMode === 'queue' && !feedLoading && !feed.length && !feedError">
           <div class="rounded-card border border-dashed border-line bg-surface p-8 text-center">
             <i class="ph ph-queue text-[26px] text-muted"></i>
             <p class="text-[13px] text-ink mt-2 font-medium">Очередь пуста</p>
@@ -323,9 +420,25 @@
           </div>
         </template>
 
-        <!-- cards -->
+        <!-- skeletons (uncertain) -->
+        <template x-if="feedMode === 'uncertain' && uncertainLoading && !uncertain.length">
+          <div class="space-y-2.5">
+            <template x-for="i in 4" :key="i">
+              <div class="rounded-card border border-line bg-surface p-3.5">
+                <div class="flex items-center justify-between">
+                  <div class="h-5 w-12 rounded-full skeleton"></div>
+                  <div class="h-3 w-14 rounded skeleton"></div>
+                </div>
+                <div class="h-3 w-24 rounded skeleton mt-2.5"></div>
+                <div class="h-3.5 w-full rounded skeleton mt-2"></div>
+              </div>
+            </template>
+          </div>
+        </template>
+
+        <!-- cards (shared renderer: очередь и «на грани» используют один и тот же markup) -->
         <div class="space-y-2.5 max-h-[calc(100vh-180px)] overflow-y-auto pr-0.5">
-          <template x-for="row in feed" :key="row.post.id">
+          <template x-for="row in cards" :key="row.post.id">
             <article @click="openPost(row.post.id)" tabindex="0"
                      @keydown.enter="openPost(row.post.id)" @keydown.space.prevent="openPost(row.post.id)"
                      class="reveal q-card group cursor-pointer rounded-card border bg-surface p-3.5"
@@ -445,6 +558,66 @@
                 </a>
               </div>
 
+              <!-- ═══ Вердикт аналитика — метка для дообучения модели ═══ -->
+              <div class="rounded-card border border-line bg-canvas px-4 py-3">
+                <div class="flex items-center gap-2 mb-2.5">
+                  <i class="ph ph-gavel text-[15px] text-ink"></i>
+                  <h3 class="section-h !mb-0">Вердикт аналитика</h3>
+                  <span class="text-[11px] text-muted normal-case font-normal tracking-normal">метка дообучает собственную модель</span>
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                  <button @click="submitVerdict('confirm')" :disabled="verdictSaving"
+                          class="lift inline-flex items-center gap-1.5 px-3 py-1.5 rounded-soft border text-[12px] font-medium disabled:opacity-50"
+                          style="background:#EDF3EC;color:#346538;border-color:#CFE2D0">
+                    <i class="ph ph-check text-[14px]"></i> Подтвердить
+                  </button>
+                  <button @click="submitVerdict('reject')" :disabled="verdictSaving"
+                          class="lift inline-flex items-center gap-1.5 px-3 py-1.5 rounded-soft border text-[12px] font-medium disabled:opacity-50"
+                          style="background:#EDF3EC;color:#346538;border-color:#CFE2D0">
+                    <i class="ph ph-x text-[14px]"></i> Не нарушение
+                  </button>
+                  <button @click="showReclassify = !showReclassify" :disabled="verdictSaving"
+                          :class="showReclassify ? 'bg-ink text-white border-ink' : 'bg-surface text-ink border-line hover:bg-canvas'"
+                          class="lift inline-flex items-center gap-1.5 px-3 py-1.5 rounded-soft border text-[12px] font-medium disabled:opacity-50">
+                    <i class="ph ph-swap text-[14px]"></i> Переклассифицировать
+                  </button>
+                  <span x-show="verdictSaving" class="text-[12px] text-muted inline-flex items-center gap-1">
+                    <i class="ph ph-circle-notch animate-spin text-[13px]"></i> сохранение…
+                  </span>
+                  <span x-show="verdictNote" x-cloak class="text-[12px] text-[#346538] inline-flex items-center gap-1 reveal">
+                    <i class="ph ph-check-circle text-[14px]"></i><span x-text="verdictNote"></span>
+                  </span>
+                </div>
+
+                <!-- reclassify: category select + confirm -->
+                <div x-show="showReclassify" x-cloak class="mt-2.5 flex flex-wrap items-center gap-2">
+                  <span class="text-[12px] text-muted">новая категория</span>
+                  <select x-model="verdictCategory"
+                          class="bg-surface border border-line rounded-soft text-[12px] px-2 py-1 outline-none focus:border-muted">
+                    <option value="gambling">гемблинг</option>
+                    <option value="pyramid">финпирамида</option>
+                    <option value="fraud">мошенничество</option>
+                    <option value="clean">чисто</option>
+                  </select>
+                  <button @click="submitVerdict('reclassify')" :disabled="verdictSaving"
+                          class="lift inline-flex items-center gap-1.5 px-3 py-1.5 rounded-soft bg-ink text-white text-[12px] font-medium hover:opacity-90 disabled:opacity-50">
+                    <i class="ph ph-check text-[14px]"></i> Сохранить категорию
+                  </button>
+                </div>
+
+                <!-- optional reason -->
+                <input x-model="verdictReason" :disabled="verdictSaving"
+                       aria-label="Причина вердикта (необязательно)"
+                       placeholder="Причина (необязательно)"
+                       class="mt-2.5 w-full bg-surface border border-line rounded-soft px-3 py-2 text-[12px] outline-none focus:border-muted disabled:opacity-50" />
+
+                <template x-if="verdictError">
+                  <div role="alert" class="rounded-soft border border-[#F3D5D5] bg-[#FDEBEC] text-[#9F2F2D] text-[12px] px-3 py-2 mt-2.5 flex items-start gap-2">
+                    <i class="ph ph-warning-circle text-[14px] mt-px shrink-0"></i><span x-text="verdictError"></span>
+                  </div>
+                </template>
+              </div>
+
               <!-- media -->
               <div class="rounded-card border border-line bg-canvas overflow-hidden">
                 <template x-if="detail.post.media_path">
@@ -500,6 +673,17 @@
                 <div class="evidence-modal-empty"
                      x-show="!(detail.extracted && (detail.extracted.transcript || detail.extracted.ocr_text || (detail.extracted.visual_concepts && detail.extracted.visual_concepts.length)))">
                   Глубокий разбор не запускался для этого поста — оценка по тексту заголовка.
+                </div>
+
+                <!-- нормализованный текст (снятие обфускации) — best-effort -->
+                <div class="evidence-modal-row" style="border-left: 3px solid #787774; padding-left: 10px;"
+                     x-show="detail.explanation && detail.explanation.normalized" x-cloak>
+                  <div class="flex items-center gap-2 mb-1.5">
+                    <i class="ph ph-magic-wand text-[14px]" style="color:#787774"></i>
+                    <span class="section-h !mb-0" style="color:#787774">Нормализованный текст</span>
+                    <span class="text-[10px] text-muted normal-case font-normal tracking-normal">снятие обфускации</span>
+                  </div>
+                  <p class="evidence" x-text="detail.explanation && detail.explanation.normalized ? detail.explanation.normalized : ''"></p>
                 </div>
 
                 <!-- речь → текст (audio transcript) -->
@@ -882,6 +1066,17 @@
               <div class="evidence-modal-empty"
                    x-show="!(liveResult.extracted && (liveResult.extracted.transcript || liveResult.extracted.ocr_text || (liveResult.extracted.visual_concepts && liveResult.extracted.visual_concepts.length)))">
                 Глубокий разбор не запускался для этого поста — оценка по тексту заголовка.
+              </div>
+
+              <!-- нормализованный текст (снятие обфускации) — best-effort -->
+              <div class="evidence-modal-row" style="border-left: 3px solid #787774; padding-left: 10px;"
+                   x-show="liveResult.explanation && liveResult.explanation.normalized" x-cloak>
+                <div class="flex items-center gap-2 mb-1.5">
+                  <i class="ph ph-magic-wand text-[14px]" style="color:#787774"></i>
+                  <span class="section-h !mb-0" style="color:#787774">Нормализованный текст</span>
+                  <span class="text-[10px] text-muted normal-case font-normal tracking-normal">снятие обфускации</span>
+                </div>
+                <p class="evidence" x-text="liveResult.explanation && liveResult.explanation.normalized ? liveResult.explanation.normalized : ''"></p>
               </div>
 
               <!-- речь → текст -->

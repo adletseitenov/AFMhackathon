@@ -174,6 +174,30 @@ function kozApp() {
     detailLoading: false,
     selectedId: null,
 
+    // --- analyst verdict (POST /api/feedback/verdict) ---
+    verdictReason: "",          // optional free-text reason
+    verdictCategory: "gambling",// category for reclassify (gambling|pyramid|fraud|clean)
+    showReclassify: false,      // reveals the category select
+    verdictSaving: false,       // request in flight
+    verdictNote: "",            // small confirmation («учтено»)
+    verdictError: "",
+
+    // --- model training widget (GET /api/feedback/stats, POST /api/feedback/retrain) ---
+    fbStats: null,              // {total_labels, labels_until_retrain, by_label}
+    retraining: false,
+    retrainStage: "",
+    retrainProgress: 0,
+    retrainError: "",
+    retrainResult: null,        // {before, after, delta, total_labels}
+    _retrainJobId: null,
+    _retrainTimer: null,
+
+    // --- uncertainty sub-view («На грани») ---
+    feedMode: "queue",          // "queue" | "uncertain"
+    uncertain: [],
+    uncertainLoading: false,
+    uncertainError: "",
+
     // --- graph ---
     graphMinRisk: 0,
     graphError: "",
@@ -202,8 +226,9 @@ function kozApp() {
     init() {
       this.loadMetrics();
       this.loadFeed();
+      this.loadFeedbackStats();
       this._pollTimer = setInterval(() => {
-        if (this.tab === "feed") this.loadFeed();
+        if (this.tab === "feed" && this.feedMode === "queue") this.loadFeed();
       }, 2000);
     },
 
@@ -407,7 +432,184 @@ function kozApp() {
         this.feedError = "Не удалось открыть материал: " + e.message;
       } finally {
         this.detailLoading = false;
+        // открытие нового материала сбрасывает черновик вердикта
+        this.showReclassify = false;
+        this.verdictReason = "";
+        this.verdictCategory = "gambling";
+        this.verdictNote = "";
+        this.verdictError = "";
         this.$nextTick(() => observeReveals());
+      }
+    },
+
+    // ===================================================== analyst verdict
+    //
+    // POST /api/feedback/verdict {post_id, verdict:'confirm'|'reject'|'reclassify',
+    //                             category?, reason?}. Подтверждаем «учтено» и
+    //                             освежаем статистику обучения.
+    async submitVerdict(verdict) {
+      if (this.verdictSaving) return;
+      if (!this.detail || !this.detail.post) return;
+      this.verdictSaving = true;
+      this.verdictNote = "";
+      this.verdictError = "";
+      const body = {
+        post_id: this.detail.post.id,
+        verdict: verdict,
+      };
+      if (verdict === "reclassify") body.category = this.verdictCategory;
+      const reason = (this.verdictReason || "").trim();
+      if (reason) body.reason = reason;
+      try {
+        const r = await fetch("/api/feedback/verdict", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) {
+          let msg = "HTTP " + r.status;
+          try { const j = await r.json(); if (j.detail) msg = j.detail; } catch (_) {}
+          throw new Error(msg);
+        }
+        this.verdictNote = "учтено";
+        this.showReclassify = false;
+        this.verdictReason = "";
+        // вердикт — новая метка для дообучения: освежаем счётчик
+        this.loadFeedbackStats();
+        // спрятать «учтено» через несколько секунд
+        setTimeout(() => { this.verdictNote = ""; }, 4000);
+      } catch (e) {
+        this.verdictError = "Не удалось сохранить вердикт: " + e.message;
+      } finally {
+        this.verdictSaving = false;
+      }
+    },
+
+    // ===================================================== model training
+    //
+    // GET /api/feedback/stats -> {total_labels, labels_until_retrain, by_label}.
+    async loadFeedbackStats() {
+      try {
+        const r = await fetch("/api/feedback/stats");
+        if (!r.ok) return; // эндпоинт ещё не поднят — просто прячем виджет
+        this.fbStats = await r.json();
+      } catch (_) {
+        /* offline — оставляем прежнее значение */
+      }
+    },
+
+    // POST /api/feedback/retrain -> {job_id}; затем poll GET /api/jobs/{id}
+    // до {before, after, delta, total_labels}. Тот же паттерн, что discover()/analyze().
+    async retrain() {
+      if (this.retraining) return;
+      this._stopRetrainPoll();
+      this.retraining = true;
+      this.retrainError = "";
+      this.retrainResult = null;
+      this.retrainStage = "постановка в очередь";
+      this.retrainProgress = 0;
+      try {
+        const r = await fetch("/api/feedback/retrain", { method: "POST" });
+        if (!r.ok) {
+          let msg = "HTTP " + r.status;
+          try { const j = await r.json(); if (j.detail) msg = j.detail; } catch (_) {}
+          throw new Error(msg);
+        }
+        const start = await r.json();
+        if (!start.job_id) {
+          // На случай синхронного ответа с готовым результатом.
+          if (start.after !== undefined || start.delta !== undefined) {
+            this._applyRetrainResult(start);
+            this.retraining = false;
+            this.loadFeedbackStats();
+            this.loadMetrics();
+            return;
+          }
+          throw new Error("сервер не вернул идентификатор задачи");
+        }
+        this._retrainJobId = start.job_id;
+        this._pollRetrain();
+      } catch (e) {
+        this.retrainError = "Переобучение не удалось: " + e.message;
+        this.retraining = false;
+      }
+    },
+
+    _pollRetrain() {
+      this._retrainTimer = setInterval(async () => {
+        if (!this._retrainJobId) return;
+        try {
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this._retrainJobId));
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          const job = await r.json();
+          this.retrainStage = job.stage || this.retrainStage || "переобучение";
+          if (typeof job.progress === "number") this.retrainProgress = job.progress;
+
+          if (job.status === "done") {
+            this._stopRetrainPoll();
+            this._applyRetrainResult(job.result || {});
+            this.retraining = false;
+            this.loadFeedbackStats(); // счётчик до переобучения обнулился
+            this.loadMetrics();       // macro-F1 в шапке мог измениться
+          } else if (job.status === "error") {
+            this._stopRetrainPoll();
+            this.retrainError = "Переобучение не удалось: " + (job.error || "неизвестная ошибка");
+            this.retraining = false;
+          }
+        } catch (e) {
+          this.retrainError = "Потеряна связь с задачей переобучения: " + e.message;
+        }
+      }, 800);
+    },
+
+    _applyRetrainResult(res) {
+      this.retrainResult = {
+        before: typeof res.before === "number" ? res.before : null,
+        after: typeof res.after === "number" ? res.after : null,
+        delta: typeof res.delta === "number" ? res.delta : null,
+        total_labels: res.total_labels || 0,
+      };
+    },
+
+    _stopRetrainPoll() {
+      if (this._retrainTimer) { clearInterval(this._retrainTimer); this._retrainTimer = null; }
+      this._retrainJobId = null;
+    },
+
+    // знак дельты F1 для подписи (+0.03 / −0.01)
+    deltaLabel(d) {
+      if (typeof d !== "number") return "";
+      const sign = d > 0 ? "+" : (d < 0 ? "−" : "±");
+      return sign + Math.abs(d).toFixed(2);
+    },
+
+    // ===================================================== «На грани» (uncertainty)
+    //
+    // GET /api/feedback/uncertain?limit= -> [{post, score, recommended_action}] —
+    // та же форма, что и лента; рендерим тем же card-разметкой.
+    setFeedMode(mode) {
+      this.feedMode = mode;
+      if (mode === "uncertain") this.loadUncertain();
+    },
+
+    // активный список карточек: основная очередь либо пограничные материалы.
+    // позволяет переиспользовать ту же card-разметку для обоих режимов.
+    get cards() {
+      return this.feedMode === "uncertain" ? this.uncertain : this.feed;
+    },
+
+    async loadUncertain() {
+      this.uncertainLoading = true;
+      this.uncertainError = "";
+      try {
+        const r = await fetch("/api/feedback/uncertain?limit=40");
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        this.uncertain = await r.json();
+        this.$nextTick(() => observeReveals());
+      } catch (e) {
+        this.uncertainError = "Не удалось загрузить пограничные материалы: " + e.message;
+      } finally {
+        this.uncertainLoading = false;
       }
     },
 

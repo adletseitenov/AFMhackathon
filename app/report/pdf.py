@@ -206,7 +206,7 @@ def build_case_pdf(post_id: str, conn=None) -> bytes:
 
     # --- Объяснение ---
     story.append(Paragraph("Почему помечено", h_section))
-    reasons = explain(score, extracted.entities)
+    reasons = explain(score, extracted.entities, extracted)
     if not reasons:
         reasons = ["Явных признаков нарушения не выявлено."]
     for r in reasons:

@@ -51,3 +51,4 @@ data/watchlist_stats.json
 
 # runtime server log
 data/server.log
+data/analyst_labels.jsonl
