@@ -34,6 +34,25 @@ _STOP = {
 
 _DEFAULT_CAP = 6
 
+# Канонические хосты площадок коротких видео для поиска по site:<host>.
+# Ключ — короткое имя платформы (как в параметре discover()), значение — домен.
+_VIDEO_SITES = {
+    "tiktok": "tiktok.com",
+    "instagram": "instagram.com",
+    "youtube": "youtube.com",
+}
+# Путь-сегмент, по которому распознаём именно ссылку на ВИДЕО (а не профиль/тег).
+_VIDEO_PATH_HINTS = {
+    "tiktok.com": ("/video/",),          # tiktok.com/@user/video/123 (не профиль /@user)
+    "instagram.com": ("/reel/", "/p/", "/tv/"),
+    "youtube.com": ("/watch", "/shorts/"),
+}
+# Служебные/не-видео пути, которые отсеиваем даже если совпали по хосту.
+_VIDEO_STOP_PATHS = (
+    "/login", "/signup", "/about", "/legal", "/help", "/explore",
+    "/privacy", "/terms", "/developers", "/business",
+)
+
 
 def _http_get(url: str) -> str:
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (KOZ media-watch)"})
@@ -96,4 +115,64 @@ def discover_telegram_channels(query: str, limit: int = _DEFAULT_CAP) -> list:
         # 2) Fallback: сырой t.me/<name> прямо в HTML (на случай прямых ссылок).
         if _channels_from_text(urllib.parse.unquote(html), seen, found, cap):
             return found
+    return found
+
+
+def _is_video_url(url: str, host: str) -> bool:
+    """True если url — ссылка на КОНКРЕТНОЕ видео на площадке host (не профиль/мусор)."""
+    try:
+        p = urllib.parse.urlparse(url)
+    except Exception:
+        return False
+    if p.scheme not in ("http", "https"):
+        return False
+    netloc = (p.hostname or "").lower().rstrip(".")
+    if not (netloc == host or netloc.endswith("." + host)):
+        return False
+    path = (p.path or "").lower()
+    if any(path.startswith(stop) for stop in _VIDEO_STOP_PATHS):
+        return False
+    hints = _VIDEO_PATH_HINTS.get(host, ())
+    if not hints:
+        return True
+    full = path + ("?" + p.query if p.query else "")
+    return any(h in full for h in hints)
+
+
+def discover_video_links(query: str, site: str, limit: int = _DEFAULT_CAP) -> list:
+    """РЕАЛЬНЫЕ ссылки на видео площадки `site` из веб-выдачи DuckDuckGo (best-effort).
+
+    site — короткое имя платформы ("tiktok"/"instagram"/"youtube") ИЛИ сам домен
+    ("tiktok.com"). Запрос строится как ``site:<host> <query>``; результаты —
+    редирект-ссылки DuckDuckGo, у которых декодируется параметр uddg в реальный
+    целевой URL (тот же подход, что и в discover_telegram_channels). Возвращает
+    дедуплицированный список URL конкретных видео (профили/служебные пути отсеяны),
+    капнутый на limit. [] при ошибке/недоступности (НЕ пробрасывает исключение).
+    """
+    host = _VIDEO_SITES.get((site or "").lower().strip(), (site or "").lower().strip())
+    if not host:
+        return []
+    cap = max(1, int(limit))
+    found: list = []
+    seen: set = set()
+    for endpoint in (
+        "https://html.duckduckgo.com/html/?q=",
+        "https://lite.duckduckgo.com/lite/?q=",
+    ):
+        try:
+            html = _http_get(endpoint + urllib.parse.quote(f"site:{host} {query}"))
+        except Exception:
+            continue
+        if not html:
+            continue
+        for target in _decoded_targets(html):
+            if not _is_video_url(target, host):
+                continue
+            key = target.split("?")[0].rstrip("/").lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            found.append(target)
+            if len(found) >= cap:
+                return found
     return found

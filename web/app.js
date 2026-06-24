@@ -138,8 +138,18 @@ function kozApp() {
     discoverProgress: 0,     // 0..100
     discoverError: "",
     discoverResult: null,    // {added, youtube_added, telegram_added, flagged, queries, samples:[...]}
+    discoverPlatform: "",    // ""=все | youtube | telegram | tiktok | instagram
+    discoverDeep: false,     // «глубокий разбор видео» — audio→текст + OCR + визуальные маркеры
+    _discoverDeepRun: false, // запомненный режим запущенной задачи (для текста результата)
     _discoverJobId: null,
     _discoverTimer: null,
+    discoverPlatforms: [
+      { id: "",          label: "Все" },
+      { id: "youtube",   label: "YouTube" },
+      { id: "telegram",  label: "Telegram" },
+      { id: "tiktok",    label: "TikTok" },
+      { id: "instagram", label: "Instagram" },
+    ],
 
     // --- telegram scanner (Лента) ---
     scanInput: "",
@@ -299,11 +309,23 @@ function kozApp() {
       this.discoverResult = null;
       this.discoverStage = "постановка в очередь";
       this.discoverProgress = 0;
+      // Запоминаем режим запуска, чтобы корректно описать результат, даже
+      // если оператор переключит тумблеры пока задача выполняется.
+      this._discoverDeepRun = this.discoverDeep;
+      // Платформенный охват: пустая строка означает «все площадки».
+      // Telegram включаем в обход только когда выбраны «Все» или «Telegram».
+      const platform = this.discoverPlatform || "";
+      const withTelegram = platform === "" || platform === "telegram";
       try {
         const r = await fetch("/api/discover", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ per_query: 4, with_telegram: true }),
+          body: JSON.stringify({
+            per_query: 4,
+            platform: platform,
+            deep: this.discoverDeep,
+            with_telegram: withTelegram,
+          }),
         });
         if (!r.ok) {
           let msg = "HTTP " + r.status;
@@ -796,30 +818,68 @@ function kozApp() {
       }
     },
 
-    // Дашборд мониторинга: один проход по реальной ленте (limit=500),
-    // агрегируем по author_handle == '@'+channel. Считаем «собрано» и «флагнуто (>=70)».
+    // Дашборд мониторинга: первичный источник — GET /api/watchlist/stats,
+    // который отдаёт per-channel {channel,last_scan,last_added,last_flagged,total_collected}.
+    // Если статистики ещё нет (канал ни разу не сканировался), дополняем агрегатом
+    // по реальной ленте, чтобы «собрано/флагнуто» не висели на нуле без причины.
     async loadWatchStats() {
       this.watchStatsLoading = true;
       try {
-        const r = await fetch("/api/feed?real_only=1&limit=500");
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        const rows = await r.json();
-        const stats = {};
-        for (const ch of this.watchlist) {
-          stats[ch] = { collected: 0, flagged: 0 };
-        }
-        // быстрый индекс канал-в-нижнем-регистре -> исходное имя
+        // нормализованный индекс @channel(lower) -> исходное имя из watchlist
         const byLower = {};
         for (const ch of this.watchlist) {
           byLower[("@" + String(ch).replace(/^@/, "")).toLowerCase()] = ch;
         }
-        for (const row of rows) {
-          const handle = String((row.post && row.post.author_handle) || "").toLowerCase();
-          const ch = byLower[handle];
-          if (!ch) continue;
-          stats[ch].collected += 1;
-          if ((row.score && row.score.risk) >= 70) stats[ch].flagged += 1;
+        const stats = {};
+        for (const ch of this.watchlist) {
+          stats[ch] = { collected: 0, flagged: 0, lastScan: null, lastFlagged: 0 };
         }
+
+        // 1) официальная статистика бэкенда
+        let haveStats = false;
+        try {
+          const sr = await fetch("/api/watchlist/stats");
+          if (sr.ok) {
+            const sj = await sr.json();
+            const chans = (sj && sj.channels) || [];
+            for (const c of chans) {
+              const key = ("@" + String(c.channel || "").replace(/^@/, "")).toLowerCase();
+              const ch = byLower[key] || c.channel;
+              if (!ch) continue;
+              if (!stats[ch]) stats[ch] = { collected: 0, flagged: 0, lastScan: null, lastFlagged: 0 };
+              stats[ch].collected = Number(c.total_collected) || 0;
+              stats[ch].flagged = Number(c.last_flagged) || 0;
+              stats[ch].lastFlagged = Number(c.last_flagged) || 0;
+              stats[ch].lastScan = c.last_scan || null;
+              haveStats = true;
+            }
+          }
+        } catch (_) { /* падаем на агрегат ленты ниже */ }
+
+        // 2) дополнение/резерв: агрегат по реальной ленте для каналов без статистики
+        try {
+          const fr = await fetch("/api/feed?real_only=1&limit=500");
+          if (fr.ok) {
+            const rows = await fr.json();
+            const agg = {};
+            for (const ch of this.watchlist) agg[ch] = { collected: 0, flagged: 0 };
+            for (const row of rows) {
+              const handle = String((row.post && row.post.author_handle) || "").toLowerCase();
+              const ch = byLower[handle];
+              if (!ch) continue;
+              agg[ch].collected += 1;
+              if ((row.score && row.score.risk) >= 70) agg[ch].flagged += 1;
+            }
+            for (const ch of this.watchlist) {
+              // официальный «собрано» в приоритете; иначе — счёт из ленты
+              if (!haveStats || !stats[ch] || stats[ch].collected === 0) {
+                stats[ch].collected = agg[ch].collected;
+              }
+              if (!stats[ch].flagged) stats[ch].flagged = agg[ch].flagged;
+            }
+          }
+        } catch (_) { /* лента недоступна — оставляем то, что есть */ }
+
         this.watchStats = stats;
       } catch (e) {
         // дашборд не критичен — молча оставляем нули, ошибку показывает основной блок
@@ -830,7 +890,7 @@ function kozApp() {
     },
 
     watchStat(channel) {
-      return this.watchStats[channel] || { collected: 0, flagged: 0 };
+      return this.watchStats[channel] || { collected: 0, flagged: 0, lastScan: null, lastFlagged: 0 };
     },
 
     // ===================================================== view helpers
@@ -838,10 +898,40 @@ function kozApp() {
       const p = RISK_PALETTE[riskTier(risk || 0)];
       return `background:${p.bg};color:${p.tx}`;
     },
+    // Тонкий риск-метр рядом с моно-числом: ширина = риск, цвет = тон тира.
+    riskMeterStyle(risk) {
+      const r = Math.max(0, Math.min(100, Number(risk) || 0));
+      const p = RISK_PALETTE[riskTier(r)];
+      return `width:${r}%;background:${p.tx}`;
+    },
     categoryLabel(c) { return CATEGORY_LABELS[c] || c; },
     actionLabel(a) { return ACTION_LABELS[a] || a; },
     featureLabel(f) { return FEATURE_LABELS[f] || f; },
     platformIcon(p) { return PLATFORM_ICONS[(p || "").toLowerCase()] || "ph-globe"; },
+    platformLabel(id) {
+      const m = (this.discoverPlatforms || []).find((x) => x.id === id);
+      return m ? m.label : "Все";
+    },
+
+    // Короткое относительное время от ISO/epoch до «сейчас» (для «последний скан»).
+    relTime(ts) {
+      if (!ts && ts !== 0) return "—";
+      let t;
+      if (typeof ts === "number") t = ts < 1e12 ? ts * 1000 : ts;
+      else { t = Date.parse(ts); if (Number.isNaN(t)) return "—"; }
+      const diff = Math.max(0, Date.now() - t);
+      const s = Math.round(diff / 1000);
+      if (s < 45) return "только что";
+      const m = Math.round(s / 60);
+      if (m < 60) return m + " мин назад";
+      const h = Math.round(m / 60);
+      if (h < 24) return h + " ч назад";
+      const d = Math.round(h / 24);
+      if (d < 7) return d + " дн назад";
+      const w = Math.round(d / 7);
+      if (w < 5) return w + " нед назад";
+      return Math.round(d / 30) + " мес назад";
+    },
 
     // Происхождение поста (источник) -> человекочитаемая метка для бейджа.
     sourceLabel(s) { return SOURCE_LABELS[(s || "").toLowerCase()] || "источник"; },

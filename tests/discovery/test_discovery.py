@@ -153,3 +153,239 @@ def test_web_parse_empty_on_failure(monkeypatch):
         raise RuntimeError("network down")
     monkeypatch.setattr(web, "_http_get", _boom)
     assert web.discover_telegram_channels("q", limit=5) == []
+
+
+# --- Platform scope + deep multimodal analysis ---
+
+from app.models import Extracted, Post, Score, VisualConcept  # noqa: E402
+
+
+def _fake_score(post, extracted, conn=None):
+    """Скор по тексту: казино/занос -> высокий риск gambling, иначе низкий fraud.
+
+    Мокаем единственный seam (классификатор/персист), но СОХРАНЯЕМ скор в БД ровно
+    как настоящий score_post — иначе тесты на содержимое таблицы scores бессмысленны.
+    """
+    blob = (extracted.combined_text or "").lower()
+    if any(w in blob for w in ("казино", "занос", "ставк", "1xbet", "casino")):
+        sc = Score(post_id=post.id, risk=90, category="gambling",
+                   class_probs={}, top_features=[])
+    else:
+        sc = Score(post_id=post.id, risk=10, category="fraud",
+                   class_probs={}, top_features=[])
+    if conn is not None:
+        db.upsert_score(conn, sc, config.action_for_risk(sc.risk), "")
+    return sc
+
+
+def test_platform_youtube_skips_telegram(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "py.db")
+    conn = db.connect(); db.init_db(conn)
+    import app.discovery.discover as d
+    monkeypatch.setattr(d, "score_post", _fake_score)
+    called = {"tg": False}
+
+    def _boom_tg(channels, conn=None):
+        called["tg"] = True
+        return {"added": 5, "flagged": 5, "channels": []}
+
+    res = discovery.discover(conn, queries=["q1"], per_query=1, search_yt=_fake_yt,
+                             with_telegram=True, scan_tg=_boom_tg, platform="youtube")
+    assert called["tg"] is False  # telegram-ветка не запускалась
+    assert res["telegram_added"] == 0
+    assert res["youtube_added"] == 1
+    assert res["platform"] == "youtube"
+
+
+def test_platform_telegram_skips_youtube(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "pt.db")
+    conn = db.connect(); db.init_db(conn)
+    import app.discovery.discover as d
+    monkeypatch.setattr(d, "discover_telegram_channels", lambda q, limit=3: ["chan_a"])
+    fake_scan = lambda channels, conn=None: {"added": 4, "flagged": 1, "channels": []}
+
+    def _boom_yt(q, limit):
+        raise AssertionError("youtube must not be called for platform=telegram")
+
+    res = discovery.discover(conn, queries=["q1"], per_query=1, search_yt=_boom_yt,
+                             with_telegram=True, scan_tg=fake_scan, platform="telegram")
+    assert res["youtube_added"] == 0
+    assert res["telegram_added"] == 4
+
+
+def test_platform_tiktok_uses_video_links_and_fetch_post(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "tt.db")
+    conn = db.connect(); db.init_db(conn)
+    import app.discovery.discover as d
+    import app.ingestion.fetch as fetch_mod
+    monkeypatch.setattr(d, "score_post", _fake_score)
+
+    calls = {"links": 0, "fetch": []}
+
+    def _fake_links(query, site, limit=6):
+        calls["links"] += 1
+        assert site == "tiktok"
+        return ["https://www.tiktok.com/@promo/video/123"]
+
+    def _fake_fetch_post(url=None, upload=None):
+        calls["fetch"].append(url)
+        return Post(id="x", platform="tiktok", author_handle="@promo", url=url,
+                    caption="Казино занос промокод", posted_at="",
+                    media_path=None, thumb_url="https://thumb/x.jpg", source="live")
+
+    monkeypatch.setattr(d.web_mod, "discover_video_links", _fake_links)
+    monkeypatch.setattr(fetch_mod, "fetch_post", _fake_fetch_post)
+
+    res = discovery.discover(conn, queries=["q1"], per_query=1, search_yt=_fake_yt,
+                             with_telegram=False, platform="tiktok")
+    assert calls["links"] == 1
+    assert calls["fetch"] == ["https://www.tiktok.com/@promo/video/123"]
+    assert res["platform_added"] == 1
+    assert res["youtube_added"] == 0  # ytsearch не используется для tiktok
+    assert res["added"] == 1
+    rows = conn.execute("SELECT url, platform, source FROM posts").fetchall()
+    assert rows[0]["url"] == "https://www.tiktok.com/@promo/video/123"
+    assert rows[0]["platform"] == "tiktok"
+    assert rows[0]["source"] == "discovered"
+    assert res["flagged"] >= 1  # казино-подпись -> эскалация
+
+
+def test_deep_triggers_fetch_extract_and_rescore(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "deep.db")
+    conn = db.connect(); db.init_db(conn)
+    import app.discovery.discover as d
+    import app.extractors.pipeline as pipeline_mod
+    import app.ingestion.fetch as fetch_mod
+
+    # innocent-looking title -> low risk on text; deep audio/ocr reveals casino promo
+    def _innocent_yt(q, limit):
+        return [{
+            "platform": "youtube",
+            "url": "https://www.youtube.com/watch?v=INNOCENT001",
+            "video_id": "INNOCENT001",
+            "author_handle": "@vlog",
+            "caption": "Мой обычный влог про природу",
+            "thumb_url": "https://i.ytimg.com/vi/INNOCENT001/hqdefault.jpg",
+        }]
+
+    monkeypatch.setattr(d, "score_post", _fake_score)
+
+    fetch_calls = {"link": []}
+
+    def _fake_fetch_link(url):
+        fetch_calls["link"].append(url)
+        return ("/tmp/media.mp4", [], {"caption": ""})
+
+    extract_calls = {"n": 0}
+
+    def _fake_extract(post, use_cache=True, progress=None):
+        extract_calls["n"] += 1
+        assert post.media_path == "/tmp/media.mp4"  # реально качали видео
+        # аудио/экран раскрывают казино-промо, которого нет в заголовке
+        combined = post.caption + " занос казино промокод 1xbet"
+        return Extracted(
+            post_id=post.id, caption=post.caption,
+            transcript="забери занос казино промокод", ocr_text="1xbet бонус",
+            visual_concepts=[VisualConcept(label="casino", score=0.9)],
+            combined_text=combined, entities=[],
+        )
+
+    monkeypatch.setattr(fetch_mod, "fetch_link", _fake_fetch_link)
+    monkeypatch.setattr(pipeline_mod, "extract", _fake_extract)
+
+    res = discovery.discover(conn, queries=["q1"], per_query=1, search_yt=_innocent_yt,
+                             with_telegram=False, platform="youtube",
+                             deep=True, deep_top=3)
+    assert fetch_calls["link"] == ["https://www.youtube.com/watch?v=INNOCENT001"]
+    assert extract_calls["n"] == 1
+    assert res["deep_analyzed"] == 1
+    # пере-скор поднял риск -> пост теперь во flagged (раньше был чистым по заголовку)
+    assert res["flagged"] >= 1
+    score_row = conn.execute("SELECT risk, category FROM scores").fetchone()
+    assert score_row["risk"] == 90 and score_row["category"] == "gambling"
+    # combined_text с транскриптом/OCR сохранён в extracted
+    ex_row = conn.execute("SELECT combined_text FROM extracted").fetchone()
+    assert "занос" in ex_row["combined_text"] and "казино" in ex_row["combined_text"]
+
+
+def test_deep_swallows_download_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "deepfail.db")
+    conn = db.connect(); db.init_db(conn)
+    import app.discovery.discover as d
+    import app.extractors.pipeline as pipeline_mod
+    import app.ingestion.fetch as fetch_mod
+    monkeypatch.setattr(d, "score_post", _fake_score)
+
+    def _boom_link(url):
+        raise RuntimeError("download failed")
+
+    def _must_not_extract(post, use_cache=True, progress=None):
+        raise AssertionError("extract must not run when download fails")
+
+    monkeypatch.setattr(fetch_mod, "fetch_link", _boom_link)
+    monkeypatch.setattr(pipeline_mod, "extract", _must_not_extract)
+
+    res = discovery.discover(conn, queries=["q1"], per_query=1, search_yt=_fake_yt,
+                             with_telegram=False, platform="youtube",
+                             deep=True, deep_top=3)
+    assert res["deep_analyzed"] == 0  # ни один не разобран
+    assert res["youtube_added"] == 1  # текстовый скор сохранён
+
+
+def test_deep_no_media_keeps_title_score(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "deepnomedia.db")
+    conn = db.connect(); db.init_db(conn)
+    import app.discovery.discover as d
+    import app.extractors.pipeline as pipeline_mod
+    import app.ingestion.fetch as fetch_mod
+    monkeypatch.setattr(d, "score_post", _fake_score)
+    monkeypatch.setattr(fetch_mod, "fetch_link", lambda url: ("", [], {}))
+    monkeypatch.setattr(pipeline_mod, "extract",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no media")))
+
+    res = discovery.discover(conn, queries=["q1"], per_query=1, search_yt=_fake_yt,
+                             with_telegram=False, platform="youtube",
+                             deep=True, deep_top=3)
+    assert res["deep_analyzed"] == 0
+
+
+def _ddg_video_html(urls):
+    """Сэмпл выдачи DDG: целевой видео-URL внутри uddg-редиректа (как в реале)."""
+    links = []
+    for u in urls:
+        target = urllib.parse.quote(u, safe="")
+        links.append(f'<a class="result__a" href="//duckduckgo.com/l/?uddg={target}&rut=z">x</a>')
+    return "<html><body>" + "".join(links) + "</body></html>"
+
+
+def test_discover_video_links_parses_tiktok_urls(monkeypatch):
+    html = _ddg_video_html([
+        "https://www.tiktok.com/@casino_promo/video/7300000000000000001",
+        "https://www.tiktok.com/@casino_promo",            # профиль -> отсев
+        "https://www.tiktok.com/login",                    # служебный -> отсев
+        "https://www.tiktok.com/@x/video/7300000000000000002",
+        "https://example.com/not-tiktok",                  # чужой хост -> отсев
+    ])
+    monkeypatch.setattr(web, "_http_get", lambda url: html)
+    links = web.discover_video_links("казино", "tiktok", limit=10)
+    assert "https://www.tiktok.com/@casino_promo/video/7300000000000000001" in links
+    assert "https://www.tiktok.com/@x/video/7300000000000000002" in links
+    assert all("/video/" in u for u in links)
+    assert "https://www.tiktok.com/login" not in links
+    assert all("example.com" not in u for u in links)
+
+
+def test_discover_video_links_cap_and_empty_on_failure(monkeypatch):
+    html = _ddg_video_html([
+        "https://www.instagram.com/reel/AAA111/",
+        "https://www.instagram.com/reel/BBB222/",
+        "https://www.instagram.com/reel/CCC333/",
+    ])
+    monkeypatch.setattr(web, "_http_get", lambda url: html)
+    links = web.discover_video_links("инвестиции", "instagram", limit=2)
+    assert len(links) == 2  # per-call cap соблюдён
+
+    def _boom(url):
+        raise RuntimeError("network down")
+    monkeypatch.setattr(web, "_http_get", _boom)
+    assert web.discover_video_links("q", "tiktok", limit=5) == []

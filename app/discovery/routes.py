@@ -1,8 +1,11 @@
 """Роут автономного поиска опасных постов (авто-подключается main.py).
 
-POST /api/discover  body (опц.): {"per_query": 4, "queries": [...], "with_telegram": true}
+POST /api/discover  body (опц.): {"per_query": 4, "queries": [...], "with_telegram": true,
+  "platform": "all", "deep": false}
 -> ставит фоновую задачу (поиск + скоринг идут десятки секунд), возвращает {job_id}.
-Прогресс/результат — через GET /api/jobs/{id}.
+platform: "all"|"youtube"|"telegram"|"tiktok"|"instagram". deep=true включает
+глубокий мультимодальный разбор (Whisper+OCR+CLIP) top-постов. Прогресс/результат —
+через GET /api/jobs/{id}.
 """
 
 from fastapi import APIRouter, Body, Request
@@ -20,6 +23,9 @@ async def api_discover(request: Request, payload: dict | None = Body(default=Non
     per_query = max(1, min(8, int(payload.get("per_query") or 4)))
     queries = payload.get("queries") if isinstance(payload.get("queries"), list) else None
     with_tg = payload.get("with_telegram", True)
+    raw_platform = payload.get("platform")
+    platform = str(raw_platform).lower().strip() if raw_platform else "all"
+    deep = bool(payload.get("deep", False))
 
     def _run(report):
         report("автономный поиск в интернете", 3)
@@ -27,7 +33,8 @@ async def api_discover(request: Request, payload: dict | None = Body(default=Non
         try:
             return discovery_mod.discover(
                 wconn, queries=queries, per_query=per_query,
-                with_telegram=bool(with_tg), report=report,
+                with_telegram=bool(with_tg), platform=platform, deep=deep,
+                report=report,
             )
         finally:
             wconn.close()

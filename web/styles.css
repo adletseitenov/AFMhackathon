@@ -132,3 +132,162 @@ body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; 
 .overflow-y-auto::-webkit-scrollbar { width: 8px; }
 .overflow-y-auto::-webkit-scrollbar-thumb { background: #EAEAEA; border-radius: 8px; }
 .overflow-y-auto::-webkit-scrollbar-track { background: transparent; }
+
+/* ============================================================ *
+ *  Redesign audit polish — premium, intentional, not templated *
+ * ============================================================ */
+
+/* ---- tabular figures everywhere numbers carry meaning ----
+   Mono is already tabular; this makes Geist Sans digits align too,
+   so risk scores, counts and stats never jitter as values change. */
+.tnum,
+.font-mono { font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1, "cv01" 1; }
+
+/* ---- visible focus rings for keyboard navigation (a11y) ----
+   Mouse users keep a clean surface (:focus:not(:focus-visible) is suppressed). */
+a, button, input, select, textarea, [tabindex] { outline: none; }
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible,
+.q-card:focus-visible {
+  outline: 2px solid #111111;
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+/* skip-to-content link — hidden until focused */
+.skip-link {
+  position: absolute; left: 12px; top: -48px; z-index: 60;
+  background: #111111; color: #fff; font-size: 12px; font-weight: 500;
+  padding: 8px 14px; border-radius: 6px;
+  transition: top 160ms cubic-bezier(.16,1,.3,1);
+}
+.skip-link:focus { top: 10px; }
+
+/* ---- queue card: hover-lift + active press + tinted shadow ----
+   One warm-tinted shadow (matches the bone canvas hue), not pure black.
+   200ms ease on transform/box-shadow only — GPU-friendly. */
+.q-card {
+  transition: border-color 200ms cubic-bezier(.16,1,.3,1),
+              box-shadow 200ms cubic-bezier(.16,1,.3,1),
+              transform 200ms cubic-bezier(.16,1,.3,1);
+  will-change: transform;
+}
+.q-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 1px 2px rgba(40,33,20,0.04), 0 8px 24px rgba(40,33,20,0.06);
+}
+.q-card:active { transform: translateY(0) scale(0.985); }
+.q-card.is-selected {
+  box-shadow: 0 1px 2px rgba(40,33,20,0.04), 0 8px 24px rgba(40,33,20,0.07);
+}
+
+/* generic interactive lift for the action/source/sample chips & buttons */
+.lift { transition: transform 200ms cubic-bezier(.16,1,.3,1),
+                    box-shadow 200ms cubic-bezier(.16,1,.3,1),
+                    background-color 200ms ease, border-color 200ms ease, opacity 200ms ease; }
+.lift:active { transform: scale(0.98); }
+
+/* ---- thin risk meter beside the mono number ----
+   A 4-segment bar; filled width tracks the 0–100 score, tinted by tier.
+   Reads instantly without parsing the digits. */
+.risk-meter {
+  position: relative;
+  height: 4px;
+  width: 100%;
+  min-width: 40px;
+  border-radius: 9999px;
+  background: rgba(17,17,17,0.06);
+  overflow: hidden;
+}
+.risk-meter > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 9999px;
+  transition: width 420ms cubic-bezier(.16,1,.3,1);
+}
+
+/* score block — number + meter share one vertical rhythm */
+.score-cluster { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 5px; }
+
+/* ---- aligned "открыть оригинал" links: pin to a clean baseline ----
+   Cards in the queue are flex columns; the origin link sits at the bottom
+   so every link forms one horizontal line regardless of caption length. */
+.q-card { display: flex; flex-direction: column; }
+.q-card .q-origin { margin-top: auto; padding-top: 8px; }
+
+/* ---- segmented control (discovery platform scope) ---- */
+.seg {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  background: #F1F1EF;
+  border: 1px solid #EAEAEA;
+  border-radius: 8px;
+}
+.seg > button {
+  font-size: 12px;
+  line-height: 1;
+  padding: 6px 10px;
+  border-radius: 6px;
+  color: #787774;
+  transition: color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+  white-space: nowrap;
+}
+.seg > button:hover { color: #111111; }
+.seg > button.is-on {
+  background: #FFFFFF;
+  color: #111111;
+  font-weight: 500;
+  box-shadow: 0 1px 2px rgba(40,33,20,0.06);
+}
+
+/* ---- soft checkbox row (deep-analysis toggle) ---- */
+.opt-row {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 12px; color: #787774; cursor: pointer; user-select: none;
+}
+.opt-row input { accent-color: #111111; width: 14px; height: 14px; border-radius: 4px; }
+.opt-row:hover { color: #111111; }
+
+/* ---- "deep mode" explainer pills (audio / OCR / visual) ---- */
+.modality-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 10px; letter-spacing: 0.03em; color: #1F6C9F;
+  background: #E1F3FE; border: 1px solid #C9E6F7;
+  border-radius: 9999px; padding: 3px 8px; white-space: nowrap;
+}
+
+/* ---- watch-channel row: hover-lift + last-scan column ---- */
+.watch-row {
+  transition: border-color 200ms cubic-bezier(.16,1,.3,1),
+              box-shadow 200ms cubic-bezier(.16,1,.3,1),
+              transform 200ms cubic-bezier(.16,1,.3,1);
+}
+.watch-row:hover {
+  transform: translateY(-1px);
+  border-color: #C9C9C7;
+  box-shadow: 0 1px 2px rgba(40,33,20,0.04), 0 6px 18px rgba(40,33,20,0.05);
+}
+/* aligned stat columns so собрано/флагнуто/скан line up across rows */
+.stat-col { display: inline-flex; flex-direction: column; gap: 2px; min-width: 64px; }
+.stat-col .stat-k { font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; color: #9A9A97; }
+.stat-col .stat-v { font-size: 14px; font-weight: 500; line-height: 1; }
+
+/* ---- pulse dot used as a live "scanning" indicator ---- */
+.live-dot {
+  width: 6px; height: 6px; border-radius: 9999px; background: #346538;
+  box-shadow: 0 0 0 0 rgba(52,101,56,0.4);
+  animation: koz-ping 2s cubic-bezier(.16,1,.3,1) infinite;
+}
+@keyframes koz-ping {
+  0% { box-shadow: 0 0 0 0 rgba(52,101,56,0.35); }
+  70%, 100% { box-shadow: 0 0 0 6px rgba(52,101,56,0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .q-card, .watch-row, .lift, .risk-meter > span { transition: none; }
+  .live-dot { animation: none; }
+}
