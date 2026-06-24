@@ -948,12 +948,12 @@ function kozApp() {
             font: { color: isPost ? "#111111" : "#787774", size: 12, face: "Geist Sans, system-ui, sans-serif" },
             title: lic
               ? "Разрешён в РК" + (ops ? ": " + ops : "") + " — блокировка не требуется, проверить рекламные нормы. Клик — следить за конторой."
-              : undefined,
+              : (this.isOperatorNode(n) ? ("Контора «" + n.label + "» — клик: следить за конторой (мониторинг)") : undefined),
             _post: isPost ? n.id.replace(/^post:/, "") : null,
-            // узел-контора: licensed-оператор (надёжный сигнал) или type brand/operator.
-            // Клик по такому узлу добавляет контору в мониторинг (Ф7).
-            _brand: !isPost && (lic || ["brand", "operator"].includes(String(n.type || "").toLowerCase()))
-              ? n.label : null,
+            // узел-контора: бренд казино/букмекера (casino_brand/betting_brand) ИЛИ
+            // licensed-оператор — клик добавляет контору в мониторинг (Ф7). Включает
+            // НЕлицензированные бренды (1xbet/mostbet) — их и нужно мониторить.
+            _brand: this.isOperatorNode(n) ? n.label : null,
           };
         });
         const edges = (g.edges || []).map((e) => ({
@@ -1418,8 +1418,21 @@ function kozApp() {
         const r = await fetch("/api/watchlist/entries");
         if (!r.ok) throw new Error("HTTP " + r.status);
         const data = await r.json();
-        this.watchEntries = (data && data.entries) || [];
-        this.watchWatched = (data && data.watched) || [];
+        // Список = ВСЁ под наблюдением (data.watched), а статистика (data.entries)
+        // накладывается сверху по ключу platform:target. Иначе только что добавленная
+        // контора/канал (ещё не сканированы -> нет в entries) не показалась бы в списке.
+        const entries = (data && data.entries) || [];
+        const watched = (data && data.watched) || [];
+        const byKey = {};
+        for (const e of entries) {
+          byKey[e.platform + ":" + String(e.target).toLowerCase()] = e;
+        }
+        const merged = watched.map((w) => byKey[w.platform + ":" + String(w.target).toLowerCase()] || {
+          target: w.target, platform: w.platform,
+          last_scan: null, last_added: 0, last_flagged: 0, total_collected: 0, licensed: null,
+        });
+        this.watchEntries = merged.length ? merged : entries;
+        this.watchWatched = watched;
         this.$nextTick(() => observeReveals());
       } catch (e) {
         this.watchEntriesError = "Не удалось загрузить мониторинг: " + e.message;
@@ -1513,18 +1526,24 @@ function kozApp() {
       }
     },
 
-    // Узлы графа/карточки, относящиеся к бренду/оператору («конторы»). Надёжный
-    // сигнал — node.licensed===true (лицензированные операторы из build.py). Тип
-    // 'brand'/'operator' у узлов-сущностей не гарантирован, поэтому ограничиваемся
-    // licensed-узлами + сам пост исключаем. Возвращает массив подписей брендов.
+    // Узел-сущность относится к КОНТОРЕ (оператору/бренду), за которым можно следить.
+    // Бренды извлекаются как сущности типов casino_brand/betting_brand (см.
+    // BRAND_ENTITY_TYPES в бэкенде) — ВНЕ зависимости от лицензии: аналитику нужно
+    // мониторить в первую очередь НЕлегальные конторы (1xbet/mostbet). licensed-узлы
+    // тоже считаем конторой (зелёный сигнал из build.py).
+    isOperatorNode(n) {
+      if (!n || n.type === "post") return false;
+      const t = String(n.type || "").toLowerCase();
+      return !!n.licensed || t.includes("brand") || t.includes("operator")
+        || t === "casino_brand" || t === "betting_brand";
+    },
+
+    // Узлы графа/карточки, относящиеся к конторе. Возвращает массив подписей брендов.
     operatorNodesFromGraph(graph) {
       const out = [];
       const nodes = (graph && graph.nodes) || [];
       for (const n of nodes) {
-        if (!n || n.type === "post") continue;
-        const t = String(n.type || "").toLowerCase();
-        const isOperator = !!n.licensed || t === "brand" || t === "operator";
-        if (isOperator && n.label) out.push(String(n.label));
+        if (this.isOperatorNode(n) && n.label) out.push(String(n.label));
       }
       return out;
     },
