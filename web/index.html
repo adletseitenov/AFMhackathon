@@ -1599,8 +1599,8 @@
                         <p class="text-[12px] text-muted py-4 text-center">Постов по этой записи пока нет.</p>
                       </template>
                       <template x-for="row in monitorDetail.posts" :key="row.post.id">
-                        <article @click="closeMonitorEntry(); openPost(row.post.id)" tabindex="0"
-                                 @keydown.enter="closeMonitorEntry(); openPost(row.post.id)"
+                        <article @click="openPostFromList(row.post.id)" tabindex="0"
+                                 @keydown.enter="openPostFromList(row.post.id)"
                                  class="lift cursor-pointer rounded-soft border border-line bg-canvas px-3 py-2 flex items-center gap-3"
                                  title="Открыть разбор поста">
                           <span class="font-mono tnum text-[13px] shrink-0" :style="riskBadge(row.score.risk)" x-text="row.score.risk"></span>

@@ -1487,6 +1487,15 @@ function kozApp() {
       this.monitorRecs = [];
     },
 
+    // Открыть разбор поста из списка модалки: панель разбора живёт на вкладке
+    // «Лента», поэтому закрываем модалку, переключаем вкладку и только потом
+    // зовём openPost (иначе detail ставится, но не виден на вкладке «Мониторинг»).
+    openPostFromList(id) {
+      this.closeMonitorEntry();
+      this.tab = "feed";
+      this.$nextTick(() => this.openPost(id));
+    },
+
     async loadWatchEntries() {
       this.watchEntriesLoading = true;
       this.watchEntriesError = "";
