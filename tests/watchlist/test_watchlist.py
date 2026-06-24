@@ -121,7 +121,11 @@ def test_scan_watchlist_empty(tmp_data, monkeypatch):
     from app.watchlist import service
     importlib.reload(service)
     result = service.scan_watchlist(conn=None)
-    assert result == {"added": 0, "flagged": 0, "channels": []}
+    # entries добавлен в Wave 2 (мультиплатформенный ключ); остальные ключи неизменны
+    assert result["added"] == 0
+    assert result["flagged"] == 0
+    assert result["channels"] == []
+    assert result.get("entries", []) == []
 
 
 def test_scan_watchlist_aggregates(tmp_data, monkeypatch):

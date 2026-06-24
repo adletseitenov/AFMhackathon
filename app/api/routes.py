@@ -42,6 +42,7 @@ from app.decision.licensed import (
     REGISTRY_DISCLAIMER,
     licensed_operators,
 )
+from app.graph.build import build_ego_graph
 from app.models import Extracted, FeatureHit, Post, Score
 
 router = APIRouter()
@@ -74,6 +75,9 @@ def _post_dict(r, licensed_text: "str | None" = None) -> dict:
         "view_count": r["view_count"],
         # «прямой эфир»: поле live может отсутствовать в выборках без него -> False.
         "live": bool(r["live"]) if "live" in r.keys() else False,
+        # «в приоритетной очереди»: revealed может отсутствовать в проекции (лента
+        # без p.revealed) -> по умолчанию True, т.к. лента возвращает только revealed=1.
+        "queued": bool(r["revealed"]) if "revealed" in r.keys() else True,
         "licensed_operators": ops, "licensed": bool(ops),
     }
 
@@ -96,17 +100,32 @@ def _score_dict_from_row(r) -> dict:
 _SORT_ORDER_BY = {
     "relevance": "s.risk DESC",
     "novelty": "p.posted_at DESC, s.risk DESC",
+    "newest": "p.posted_at DESC, s.risk DESC",  # алиас novelty (по дате публикации)
     "popularity": "p.view_count DESC, s.risk DESC",
 }
 _DEFAULT_SORT = "relevance"
+
+# Полосы риска: публичное значение action -> хранимое recommended_action.
+# «clean» — публичное имя очищенной полосы, в БД хранится как «auto_clear»;
+# принимаем ОБА. Неизвестное/пустое -> фильтр не применяется.
+_ACTION_ALIASES = {
+    "escalate": "escalate",
+    "review": "review",
+    "clean": "auto_clear",
+    "auto_clear": "auto_clear",
+}
 
 
 @router.get("/api/feed")
 def api_feed(
     request: Request,
     min_risk: int = Query(0),
+    max_risk: int = Query(100),
     category: "str | None" = Query(None),
     platform: "str | None" = Query(None),
+    action: "str | None" = Query(None),
+    since: "str | None" = Query(None),
+    licensed: str = Query("all"),
     limit: int = Query(100),
     real_only: int = Query(0),
     sort: str = Query(_DEFAULT_SORT),
@@ -117,13 +136,13 @@ def api_feed(
                                   _SORT_ORDER_BY[_DEFAULT_SORT])
     sql = (
         "SELECT p.id, p.platform, p.author_handle, p.url, p.caption, p.posted_at, "
-        "p.media_path, p.thumb_url, p.source, p.view_count, p.live, "
+        "p.media_path, p.thumb_url, p.source, p.view_count, p.live, p.revealed, "
         "s.post_id, s.risk, s.category, s.class_probs_json, s.top_features_json, "
         "s.recommended_action "
         "FROM posts p JOIN scores s ON s.post_id = p.id "
-        "WHERE p.revealed = 1 AND s.risk >= ?"
+        "WHERE p.revealed = 1 AND s.risk >= ? AND s.risk <= ?"
     )
-    params: list = [min_risk]
+    params: list = [min_risk, max_risk]
     if real_only:
         # только НАСТОЯЩИЕ посты: live-скан Telegram (source=live) и автономно
         # найденные в интернете (source=discovered). seed-демо и синтетику скрываем.
@@ -134,11 +153,21 @@ def api_feed(
     if platform:
         sql += " AND p.platform = ?"
         params.append(platform)
+    # Полоса риска по рекомендованному действию: «clean» -> хранимое «auto_clear».
+    # Неизвестное/пустое action игнорируем (фильтр не применяется).
+    stored_action = _ACTION_ALIASES.get((action or "").lower().strip())
+    if stored_action:
+        sql += " AND s.recommended_action = ?"
+        params.append(stored_action)
+    # Дата публикации: ISO-строки сравниваются лексикографически (SQLite ISO-8601).
+    if since:
+        sql += " AND p.posted_at >= ?"
+        params.append(since)
     sql += f" ORDER BY {order_by} LIMIT ?"
     params.append(limit)
 
     rows = conn.execute(sql, params).fetchall()
-    return [
+    result = [
         {
             "post": _post_dict(r),
             "score": _score_dict_from_row(r),
@@ -146,6 +175,15 @@ def api_feed(
         }
         for r in rows
     ]
+
+    # Флаг «разрешён в РК» (licensed) — ВЫЧИСЛЯЕМОЕ поле (не колонка), поэтому
+    # фильтруем в Python по уже собранным post-словарям. Неизвестное/«all» -> без фильтра.
+    lic = (licensed or "all").lower().strip()
+    if lic == "licensed":
+        result = [row for row in result if row["post"]["licensed"]]
+    elif lic == "unlicensed":
+        result = [row for row in result if not row["post"]["licensed"]]
+    return result
 
 
 # --------------------------------------------------------------------------- #
@@ -193,6 +231,14 @@ def api_post_detail(request: Request, post_id: str):
     # risk/score/recommended_action НЕ меняем — это отдельное доп. поле.
     case_recs = recommendations_for_post(conn, post_dict, score)
 
+    # Граф-связи (эго-сеть) для мини-граф на странице анализа: сам пост, его
+    # сущности и со-посты, делящие сущность. Используем то же соединение (conn
+    # НЕ закрывается). Сбой графа НИКОГДА не роняет drill-down 500-кой.
+    try:
+        graph = build_ego_graph(post_id, conn)
+    except Exception:
+        graph = {"nodes": [], "edges": []}
+
     return {
         "post": post_dict,
         "extracted": asdict(e) if e is not None else None,
@@ -204,7 +250,49 @@ def api_post_detail(request: Request, post_id: str):
         "licensed_disclaimer": REGISTRY_DISCLAIMER if is_licensed else "",
         # Точечные рекомендации именно для этого кейса (2-5, отсортированы по важности).
         "case_recommendations": case_recs,
+        # Граф-связи (эго-сеть) поста для мини-граф на странице анализа.
+        "graph": graph,
     }
+
+
+# --------------------------------------------------------------------------- #
+# POST /api/post/{post_id}/queue — аналитик подтверждает статус приоритетной
+# очереди поста. queued=true -> в очереди (revealed=1); queued=false -> убрать
+# из очереди (revealed=0). Решение фиксируется в аудит-журнал.
+# --------------------------------------------------------------------------- #
+
+@router.post("/api/post/{post_id}/queue")
+async def api_post_queue(request: Request, post_id: str):
+    conn = request.app.state.db
+
+    # Тело: JSON-объект {"queued": bool}. Парсим защитно (никогда не 500).
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="ожидается JSON-тело")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="ожидается JSON-тело")
+    queued = payload.get("queued")
+    if not isinstance(queued, bool):
+        raise HTTPException(
+            status_code=400,
+            detail="поле 'queued' обязательно и должно быть булевым (true/false)",
+        )
+
+    if db.get_post(conn, post_id) is None:
+        raise HTTPException(status_code=404, detail="пост не найден")
+
+    if queued:
+        db.reveal_post(conn, post_id)
+    else:
+        conn.execute("UPDATE posts SET revealed=0 WHERE id=?", (post_id,))
+        conn.commit()
+
+    ts = datetime.now(timezone.utc).isoformat()
+    db.add_audit(conn, ts, post_id, "queue_confirm", "analyst",
+                 json.dumps({"queued": queued}, ensure_ascii=False))
+
+    return {"ok": True, "post_id": post_id, "queued": queued}
 
 
 # --------------------------------------------------------------------------- #

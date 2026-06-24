@@ -82,3 +82,118 @@ def test_recommendations_endpoint_empty_db_no_crash(tmp_path, monkeypatch):
     assert resp.status_code == 200
     data = resp.json()
     assert data["recommendations"], "пустая БД -> хотя бы дефолтная рекомендация"
+
+
+def test_recommendations_focus_param(client):
+    resp = client.get("/api/recommendations", params={"focus": "brand:1xbet"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert set(data.keys()) >= {"stats", "recommendations"}
+    recs = data["recommendations"]
+    assert isinstance(recs, list) and recs, "фокус по бренду -> непустые рекомендации"
+    top = recs[0]
+    assert "1xbet" in (top["title"] + top["rationale"] + top["action"]).lower(), (
+        "топ-рекомендация при focus=brand:1xbet должна упоминать 1xbet"
+    )
+
+
+def test_recommendations_focus_category(client):
+    resp = client.get("/api/recommendations", params={"focus": "category:gambling"})
+    assert resp.status_code == 200
+    data = resp.json()
+    recs = data["recommendations"]
+    assert isinstance(recs, list) and recs, "фокус по категории -> непустые рекомендации"
+    blob = " ".join(
+        (r["title"] + r["rationale"] + r["action"]) for r in recs
+    ).lower()
+    # gambling-ориентированность: упоминание гемблинга/казино/букмекера/бренда 1xbet.
+    assert any(
+        kw in blob for kw in ("гемблинг", "казино", "букмекер", "1xbet", "ставк")
+    ), "рекомендации при focus=category:gambling должны быть про гемблинг"
+
+
+def test_recommendations_focus_garbage_falls_back(client):
+    resp = client.get("/api/recommendations", params={"focus": "garbage"})
+    assert resp.status_code == 200, "мусорный focus не должен ронять роут (нет 500)"
+    data = resp.json()
+    assert data["recommendations"], "мусорный focus -> глобальный фолбэк, непустой список"
+
+
+def test_recommendations_sources_shape(client):
+    resp = client.get("/api/recommendations/sources")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert {"categories", "brands", "platforms"}.issubset(data)
+    for key in ("categories", "brands", "platforms"):
+        assert isinstance(data[key], list), f"{key} должно быть списком"
+    brands = data["brands"]
+    assert brands, "на засеянной фикстуре brands непуст (доминирует 1xBet)"
+    for b in brands:
+        assert {"id", "label", "count"}.issubset(b)
+        assert isinstance(b["licensed"], bool), "каждый brand несёт булев licensed"
+    platforms = data["platforms"]
+    platform_ids = {p.get("id") for p in platforms} | {
+        p.get("label") for p in platforms
+    }
+    assert "tiktok" in platform_ids, "tiktok среди платформ засеянной фикстуры"
+
+
+def test_recommendations_sources_empty_db(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "rec_sources_empty.db")
+    conn = db.connect()
+    db.init_db(conn)
+    conn.close()
+    with TestClient(app) as c:
+        resp = c.get("/api/recommendations/sources")
+    assert resp.status_code == 200, "пустая БД -> /sources не падает"
+    data = resp.json()
+    assert {"categories", "brands", "platforms"}.issubset(data)
+    for key in ("categories", "brands", "platforms"):
+        assert isinstance(data[key], list), f"{key} список (может быть пустым)"
+
+
+_HOTSPOTS_KEYS = {
+    "top_problems", "top_operators", "top_telegram", "top_youtube",
+    "recommendations",
+}
+
+
+def test_hotspots_shape(client):
+    resp = client.get("/api/hotspots")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert _HOTSPOTS_KEYS.issubset(data), "все 5 ключей плашки присутствуют"
+    for key in ("top_problems", "top_operators", "top_telegram", "top_youtube"):
+        assert isinstance(data[key], list), f"{key} должно быть списком"
+    assert isinstance(data["recommendations"], list), "recommendations — список"
+    # на засеянных gambling/1xBet данных топ-проблемы непусты (есть gambling).
+    problems = data["top_problems"]
+    assert problems, "top_problems непуст (gambling в засеянной фикстуре)"
+    assert any(
+        (p.get("category") or "").lower() == "gambling" for p in problems
+    ), "gambling среди топ-проблем"
+    # топ-конторы непусты и содержат нелицензированный 1xbet.
+    operators = data["top_operators"]
+    assert operators, "top_operators непуст (доминирует 1xBet)"
+    assert any(
+        "1xbet" in (op.get("brand") or "").lower() and op.get("licensed") is False
+        for op in operators
+    ), "1xbet среди контор с licensed=False"
+    assert data["recommendations"], "решения (recommendations) непусты"
+
+
+def test_hotspots_empty_db(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "hotspots_empty.db")
+    conn = db.connect()
+    db.init_db(conn)
+    conn.close()
+    with TestClient(app) as c:
+        resp = c.get("/api/hotspots")
+    assert resp.status_code == 200, "пустая БД -> /hotspots не падает (нет 500)"
+    data = resp.json()
+    assert _HOTSPOTS_KEYS.issubset(data), "все 5 ключей присутствуют и на пустой БД"
+    for key in ("top_problems", "top_operators", "top_telegram", "top_youtube"):
+        assert isinstance(data[key], list), f"{key} список (пустой на пустой БД)"
+    assert isinstance(data["recommendations"], list), (
+        "recommendations — список (может быть непустым: дефолтная рекомендация)"
+    )

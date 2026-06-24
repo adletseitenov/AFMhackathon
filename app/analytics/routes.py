@@ -7,7 +7,11 @@ main.py НЕ правится. Соединение берётся из request.
 
 from fastapi import APIRouter, Request
 
-from app.analytics.recommend import build_recommendations
+from app.analytics.recommend import (
+    available_sources,
+    build_hotspots,
+    build_recommendations,
+)
 from app.analytics.trends import aggregate
 
 router = APIRouter()
@@ -21,12 +25,19 @@ def get_trends(request: Request) -> dict:
 
 
 @router.get("/api/recommendations")
-def get_recommendations(request: Request) -> dict:
+def get_recommendations(request: Request, focus: "str | None" = None) -> dict:
     """Превентивные рекомендации для АФМ (rule-based, без побочных эффектов).
 
-    Форма: {stats:{total_posts, flagged, top_platform, top_brand},
-            recommendations:[{title, rationale, action, priority, evidence}]}.
-    Соединение берётся из request.app.state.db (одно соединение из lifespan).
+    Необязательный query-параметр `focus` сужает рекомендации до одной проблемы/
+    источника (например "brand:1xbet"/"category:gambling"/"platform:tiktok"); его
+    значение передаётся в build_recommendations как есть — парсинг и валидация
+    (включая мусор -> глобальный режим, без падения) выполняются в recommend.py.
+    focus=None -> прежнее (глобальное) поведение.
+
+    Форма: {generated_at_note, focus, stats:{total_posts, flagged, top_platform,
+            top_brand}, recommendations:[{title, rationale, action, priority,
+            evidence}]}. Соединение берётся из request.app.state.db (одно
+    соединение из lifespan).
     """
     conn = request.app.state.db
     agg = aggregate(conn)
@@ -46,11 +57,49 @@ def get_recommendations(request: Request) -> dict:
             "Рекомендации сформированы детерминированными правилами поверх "
             "локальных агрегатов (без внешних API/LLM)."
         ),
+        "focus": focus,
         "stats": {
             "total_posts": agg["total_posts"],
             "flagged": flagged,
             "top_platform": top_platform,
             "top_brand": top_brand,
         },
-        "recommendations": build_recommendations(conn),
+        "recommendations": build_recommendations(conn, focus=focus),
     }
+
+
+@router.get("/api/recommendations/sources")
+def get_recommendation_sources(request: Request) -> dict:
+    """Доступные «проблемы и источники» для фронтового селектора фокуса.
+
+    Возвращает available_sources(conn): {categories, brands, platforms} — каждый
+    список элементов {id, label, count, ...}; brands дополнительно несут флаг
+    licensed: bool. Соединение берётся из request.app.state.db (то же соединение
+    из lifespan — нового не открываем). Статический путь без path-параметров,
+    поэтому конфликта маршрутизации с /api/recommendations нет.
+    """
+    conn = request.app.state.db
+    return available_sources(conn)
+
+
+@router.get("/api/hotspots")
+def get_hotspots(request: Request) -> dict:
+    """«Актуальные проблемы» — верхняя плашка дашборда АФМ.
+
+    Возвращает build_hotspots(conn): самые опасные ПРОБЛЕМЫ (категории-угрозы),
+    самые опасные КОНТОРЫ (бренды/операторы, с флагом licensed), самые опасные
+    TELEGRAM- и YOUTUBE-каналы, плюс приоритезированные РЕШЕНИЯ (рекомендации).
+
+    Форма (5 ключей, всегда присутствуют; списки могут быть пустыми):
+      {top_problems:  [{category, label, count, avg_risk, escalate_count}],
+       top_operators: [{brand, count, avg_risk, licensed: bool}],
+       top_telegram:  [{channel, count, avg_risk}],
+       top_youtube:   [{channel, count, avg_risk}],
+       recommendations: [{title, rationale, action, priority, evidence, score}]}
+
+    Соединение берётся из request.app.state.db (то же соединение из lifespan — нового
+    не открываем). Статический путь без path-параметров, конфликта маршрутизации нет.
+    Движок rule-based и никогда не падает (R4) -> роут не отдаёт 500.
+    """
+    conn = request.app.state.db
+    return build_hotspots(conn)

@@ -1,6 +1,11 @@
 """Движок РЕКОМЕНДАЦИЙ КӨЗ — ЧИСТО rule-based превентивные действия для АФМ.
 
-`build_recommendations(conn=None) -> list[dict]` читает агрегаты трендов
+`build_recommendations(conn=None, focus=None) -> list[dict]`: без focus — обычная
+глобальная выдача; с focus (категория/бренд/площадка) — узкая выдача по ОДНОМУ
+срезу с цифрами. `available_sources(conn=None) -> dict` — список срезов (категории-
+угрозы / бренды / площадки) для UI-селектора фронта.
+
+`build_recommendations` читает агрегаты трендов
 (переиспользует app.analytics.trends.aggregate) + несколько собственных
 read-only SQL по posts/scores/extracted, применяет НАБОР ПРАВИЛ и возвращает
 приоритезированный список превентивных рекомендаций на русском.
@@ -112,23 +117,72 @@ def _rank_and_dedup(recs: list[dict]) -> list[dict]:
     return out
 
 
-def build_recommendations(conn: "sqlite3.Connection | None" = None) -> list[dict]:
+def build_recommendations(
+    conn: "sqlite3.Connection | None" = None,
+    focus: "dict | str | None" = None,
+) -> list[dict]:
     """Построить приоритезированный список превентивных рекомендаций для АФМ.
 
     conn=None -> открыть своё соединение (config.DB_PATH) и закрыть в finally.
     Никогда не бросает: на пустых/битых данных возвращает разумный дефолт.
+
+    `focus` (опц.) сужает выдачу на ОДНУ проблему/источник. Принимается в двух
+    формах:
+      (a) dict: {"kind": "category"|"brand"|"platform", "value": "<...>"}
+      (b) строка: "category:pyramid" / "brand:1xbet" / "platform:tiktok"
+    Любой мусор/None/неизвестный kind -> прежнее ГЛОБАЛЬНОЕ поведение (без регресса).
+    При заданном focus -> только рекомендации по этому срезу (>=1, с цифрами).
     """
     own_conn = conn is None
     if own_conn:
         conn = db.connect()
     try:
-        return _build(conn)
+        parsed = _parse_focus(focus)
+        if parsed is None:
+            return _build(conn)
+        return _build_focused(conn, parsed)
     except Exception:
         # R4: движок не должен ронять роут — отдаём безопасный дефолт.
         return [_default_monitoring_rec(total_posts=0, flagged=0)]
     finally:
         if own_conn:
             conn.close()
+
+
+# --- Разбор focus -------------------------------------------------------------
+_FOCUS_KINDS = {"category", "brand", "platform"}
+
+
+def _parse_focus(focus: "dict | str | None") -> "dict | None":
+    """Нормализовать focus в {"kind","value"} либо None (пусто/мусор/неизв. kind).
+
+    Поддержаны ОБЕ формы: dict {"kind","value"} и строка "kind:value" (сплит по
+    ПЕРВОМУ ':'). kind/value триммятся; неизвестный kind или пустой value -> None.
+    `value` сохраняется в исходном виде для отображения; матчинг по срезам идёт
+    регистронезависимо (на стороне _build_focused через lower()/COLLATE NOCASE).
+    """
+    if focus is None:
+        return None
+    kind = None
+    value = None
+    if isinstance(focus, dict):
+        kind = focus.get("kind")
+        value = focus.get("value")
+    elif isinstance(focus, str):
+        s = focus.strip()
+        if ":" not in s:
+            return None
+        raw_kind, raw_value = s.split(":", 1)
+        kind, value = raw_kind, raw_value
+    else:
+        return None
+    if not isinstance(kind, str) or not isinstance(value, str):
+        return None
+    kind = kind.strip().lower()
+    value = value.strip()
+    if kind not in _FOCUS_KINDS or not value:
+        return None
+    return {"kind": kind, "value": value}
 
 
 # --- ТОЧЕЧНЫЕ рекомендации под конкретный кейс --------------------------------
@@ -762,6 +816,665 @@ def _build(conn: sqlite3.Connection) -> list[dict]:
 
     # РАНЖИРОВАНИЕ по числовому score важности (high раньше low) + дедуп близких.
     return _rank_and_dedup(recs)
+
+
+# --- ФОКУСНЫЙ режим: рекомендации по ОДНОЙ проблеме/источнику ------------------
+def _no_data_focus_rec(label: str, kind: str) -> dict:
+    """Честный low-rec, когда по срезу нет данных (не падаем, не выдумываем меры)."""
+    return {
+        "title": f"Нет данных по срезу «{label}»",
+        "rationale": (
+            f"По выбранному срезу «{label}» в базе пока нет постов — оснований для "
+            "превентивных действий нет, нужно расширить наблюдение по этому срезу."
+        ),
+        "action": (
+            f"Расширить мониторинг по срезу «{label}»: добавить ключевые слова/"
+            "аккаунты и повторить автопоиск, затем переоценить."
+        ),
+        "priority": "low",
+        "evidence": f"{kind}: {label} — 0 постов",
+        "score": _importance_score("low"),
+    }
+
+
+def _focus_category(conn: sqlite3.Connection, value: str) -> list[dict]:
+    """Рекомендации по ОДНОЙ категории-угрозе (value регистронезависимо)."""
+    cat = value.lower()
+    label = _CAT_RU.get(cat, value)
+    # сколько постов этой категории + распределение риска внутри неё.
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS n,
+               SUM(CASE WHEN risk >= ? THEN 1 ELSE 0 END) AS high,
+               SUM(CASE WHEN risk >= ? AND risk < ? THEN 1 ELSE 0 END) AS mid
+        FROM scores
+        WHERE category = ? COLLATE NOCASE
+        """,
+        (_RISK_ESCALATE, _RISK_REVIEW, _RISK_ESCALATE, cat),
+    ).fetchone()
+    n = (row["n"] if row else 0) or 0
+    if n == 0:
+        return [_no_data_focus_rec(label, "category")]
+    high = (row["high"] or 0)
+    mid = (row["mid"] or 0)
+
+    # топ-площадки этой категории.
+    plat_rows = conn.execute(
+        """
+        SELECT p.platform AS platform, COUNT(*) AS n
+        FROM posts p JOIN scores s ON s.post_id = p.id
+        WHERE s.category = ? COLLATE NOCASE
+        GROUP BY p.platform
+        ORDER BY n DESC, p.platform
+        """,
+        (cat,),
+    ).fetchall()
+    top_plats = [r["platform"] for r in plat_rows[:3] if r["platform"]]
+    plats_txt = ", ".join(top_plats) if top_plats else "—"
+    scale = high / n if n else 0.0
+    recs: list[dict] = []
+
+    if cat == "pyramid":
+        recs.append({
+            "title": "Публичное предупреждение о финпирамидах",
+            "rationale": (
+                f"Найдено {n} постов категории «{label}», из них {high} высокого "
+                f"риска (70+) — признак активной вербовочной кампании, важна скорость."
+            ),
+            "action": (
+                "Выпустить публичное предупреждение о признаках финпирамиды; "
+                "уведомить Национальный Банк РК и финрегулятор."
+            ),
+            "priority": "high" if high >= 1 else "medium",
+            "evidence": f"pyramid: {n} постов, высокого риска {high}; площадки: {plats_txt}",
+            "score": _importance_score("high" if high >= 1 else "medium", max(scale, n / (n + 4.0))),
+        })
+        recs.append({
+            "title": "Takedown финпирамидного контента",
+            "rationale": (
+                f"{n} постов категории «{label}» на площадках ({plats_txt}) — "
+                "контент продолжает вербовать вкладчиков, требуется снятие."
+            ),
+            "action": (
+                f"Запросить takedown постов категории «{label}» у площадок ({plats_txt}); "
+                "зафиксировать доказательства для дела."
+            ),
+            "priority": "high" if high >= 3 else "medium",
+            "evidence": f"pyramid: {n} постов; площадки: {plats_txt}",
+            "score": _importance_score("high" if high >= 3 else "medium", n / (n + 4.0)),
+        })
+    elif cat == "gambling":
+        # доля лицензированных vs нелицензированных среди постов категории.
+        lic_n, unlic_n = _gambling_license_split(conn)
+        recs.append({
+            "title": "Нелицензированный гемблинг: блок и takedown",
+            "rationale": (
+                f"Найдено {n} постов категории «{label}», из них {high} высокого "
+                f"риска (70+). Лицензированных оператора(ов) в срезе: {lic_n}, "
+                f"нелицензированных упоминаний: {unlic_n} — по нелегальным основная "
+                "мера снять контент и перекрыть платежи."
+            ),
+            "action": (
+                "По нелицензированным операторам: запросить takedown и блокировку "
+                "платёжных каналов через банки/провайдеров."
+            ),
+            "priority": "high" if high >= 1 else "medium",
+            "evidence": (
+                f"gambling: {n} постов, высокого риска {high}; "
+                f"лиценз. {lic_n} / нелиценз. {unlic_n}; площадки: {plats_txt}"
+            ),
+            "score": _importance_score("high" if high >= 1 else "medium", max(scale, n / (n + 4.0))),
+        })
+        if lic_n > 0:
+            recs.append({
+                "title": "Лицензированные операторы: контроль рекламы",
+                "rationale": (
+                    f"В срезе «{label}» есть {lic_n} лицензированных в РК операторов — "
+                    f"их деятельность легальна, блокировка не требуется. {COMPLIANCE_HINT}"
+                ),
+                "action": (
+                    f"Не блокировать лицензированных операторов. {COMPLIANCE_HINT} "
+                    "При нарушениях рекламы — предписание оператору/площадке."
+                ),
+                "priority": "medium",
+                "evidence": f"gambling: лицензированных операторов {lic_n}; сверять с реестром АФМ/ЕУЦ",
+                "score": _importance_score("medium", 0.5),
+            })
+    elif cat == "fraud":
+        recs.append({
+            "title": "Пресечь мошеннические схемы",
+            "rationale": (
+                f"Найдено {n} постов категории «{label}», из них {high} высокого "
+                f"риска (70+) — признаки обмана пользователей, нужно быстрое реагирование."
+            ),
+            "action": (
+                f"Запросить удаление контента у площадок ({plats_txt}); зафиксировать "
+                "и сохранить доказательства, при подтверждении передать в производство."
+            ),
+            "priority": "high" if high >= 1 else "medium",
+            "evidence": f"fraud: {n} постов, высокого риска {high}; площадки: {plats_txt}",
+            "score": _importance_score("high" if high >= 1 else "medium", max(scale, n / (n + 4.0))),
+        })
+        recs.append({
+            "title": "Приобщить доказательства мошенничества к делу",
+            "rationale": (
+                f"{n} постов категории «{label}» — сохранение доказательств критично "
+                "до удаления контента площадками."
+            ),
+            "action": (
+                "Зафиксировать скриншоты/архив постов и реквизиты; приобщить к делу "
+                "и запросить данные у платёжных провайдеров/площадок."
+            ),
+            "priority": "medium",
+            "evidence": f"fraud: {n} постов; площадки: {plats_txt}",
+            "score": _importance_score("medium", n / (n + 4.0)),
+        })
+    else:
+        # неизвестная (или clean) категория — обзорный rec по срезу.
+        recs.append({
+            "title": f"Срез категории «{label}»",
+            "rationale": (
+                f"В срезе «{label}» {n} постов, из них {high} высокого и {mid} "
+                f"среднего риска; площадки: {plats_txt}."
+            ),
+            "action": f"Проанализировать срез «{label}» и определить меры по площадкам ({plats_txt}).",
+            "priority": "medium" if high >= 1 else "low",
+            "evidence": f"{cat}: {n} постов (высокий {high}, средний {mid}); площадки: {plats_txt}",
+            "score": _importance_score("medium" if high >= 1 else "low", n / (n + 4.0)),
+        })
+
+    # общий обзорный rec по риску внутри среза (для любой угрозы).
+    recs.append({
+        "title": f"Распределение риска в срезе «{label}»",
+        "rationale": (
+            f"В категории «{label}»: {high} постов высокого риска (70+) и {mid} — "
+            f"среднего (40-69) из {n}; приоритет ручной проверки — на высокий риск."
+        ),
+        "action": (
+            f"Приоритизировать ручную проверку high-risk постов категории «{label}»."
+        ),
+        "priority": "medium" if high >= 1 else "low",
+        "evidence": f"{cat}: высокий {high}, средний {mid}, всего {n}",
+        "score": _importance_score("medium" if high >= 1 else "low", scale),
+    })
+    return recs
+
+
+def _gambling_license_split(conn: sqlite3.Connection) -> "tuple[int, int]":
+    """(лиценз_постов, нелиценз_постов) среди gambling по брендам extracted.
+
+    Пост считается лицензированным, если в его сущностях-брендах есть хотя бы один
+    лицензированный в РК оператор; иначе — нелицензированным. Read-only, безопасно.
+    """
+    lic = 0
+    unlic = 0
+    rows = conn.execute(
+        """
+        SELECT e.entities_json AS ej
+        FROM extracted e JOIN scores s ON s.post_id = e.post_id
+        WHERE s.category = 'gambling' COLLATE NOCASE
+        """
+    ).fetchall()
+    for r in rows:
+        try:
+            ents = json.loads(r["ej"]) or []
+        except (TypeError, ValueError):
+            ents = []
+        if not isinstance(ents, list):
+            ents = []
+        post_licensed = False
+        has_brand = False
+        for e in ents:
+            if not isinstance(e, dict):
+                continue
+            if e.get("type") in BRAND_ENTITY_TYPES:
+                has_brand = True
+                brand = e.get("normalized") or e.get("value") or ""
+                if is_licensed(brand):
+                    post_licensed = True
+                    break
+        if post_licensed:
+            lic += 1
+        elif has_brand:
+            unlic += 1
+    return lic, unlic
+
+
+def _focus_brand(conn: sqlite3.Connection, value: str) -> list[dict]:
+    """Рекомендации по ОДНОМУ бренду (матч по normalized-or-value, нечувств. к регистру)."""
+    target = value.lower()
+    # посты, в которых бренд встречается (дедуп: один пост — один раз на бренд).
+    post_ids: set = set()
+    platforms: Counter = Counter()
+    display = value  # человекочитаемое имя бренда
+    rows = conn.execute(
+        "SELECT post_id, entities_json FROM extracted"
+    ).fetchall()
+    for r in rows:
+        try:
+            ents = json.loads(r["entities_json"]) or []
+        except (TypeError, ValueError):
+            ents = []
+        if not isinstance(ents, list):
+            continue
+        matched = False
+        for e in ents:
+            if not isinstance(e, dict):
+                continue
+            if e.get("type") not in BRAND_ENTITY_TYPES:
+                continue
+            norm = (e.get("normalized") or e.get("value") or "")
+            disp = (e.get("value") or e.get("normalized") or "")
+            if str(norm).strip().lower() == target or str(disp).strip().lower() == target:
+                matched = True
+                if str(disp).strip():
+                    display = disp
+                break
+        if matched:
+            post_ids.add(r["post_id"])
+
+    n = len(post_ids)
+    if n == 0:
+        return [_no_data_focus_rec(value, "brand")]
+
+    # площадки бренда (по найденным постам).
+    if post_ids:
+        qmarks = ",".join("?" for _ in post_ids)
+        prows = conn.execute(
+            f"SELECT platform, COUNT(*) AS n FROM posts WHERE id IN ({qmarks}) "
+            "GROUP BY platform ORDER BY n DESC, platform",
+            tuple(post_ids),
+        ).fetchall()
+        plats = [r["platform"] for r in prows if r["platform"]]
+    else:
+        plats = []
+    plats_txt = ", ".join(plats[:3]) if plats else "—"
+    scale = n / (n + 4.0)
+    recs: list[dict] = []
+
+    if is_licensed(display) or is_licensed(value):
+        recs.append({
+            "title": f"Лицензированный оператор: {display}",
+            "rationale": (
+                f"Бренд «{display}»: {n} постов. Это лицензированный в РК букмекер — "
+                f"деятельность легальна, блокировка не требуется. {COMPLIANCE_HINT}"
+            ),
+            "action": (
+                f"Не блокировать оператора «{display}». {COMPLIANCE_HINT} При нарушениях "
+                "рекламы — предписание оператору/площадке."
+            ),
+            "priority": "medium",
+            "evidence": f"{display}: {n} постов; лицензирован в РК (сверять с реестром АФМ/ЕУЦ)",
+            "score": _importance_score("medium", scale),
+        })
+        recs.append({
+            "title": f"Контроль рекламных норм: {display}",
+            "rationale": (
+                f"По бренду «{display}» ({n} постов; площадки: {plats_txt}) проверяется "
+                "соблюдение рекламных норм (возраст 21+, пометка «реклама», запрет "
+                "«гарантированного дохода» и агрессивных бонусов)."
+            ),
+            "action": (
+                f"Проверить рекламу «{display}» на площадках ({plats_txt}): возраст 21+, "
+                "пометка «реклама», отсутствие гарантий дохода/агрессивных бонусов."
+            ),
+            "priority": "medium",
+            "evidence": f"{display}: {n} постов; площадки: {plats_txt}; рекламные нормы (21+)",
+            "score": _importance_score("medium", scale),
+        })
+    else:
+        recs.append({
+            "title": f"Блокировка платёжных каналов: {display}",
+            "rationale": (
+                f"Бренд «{display}»: {n} постов — устойчивый рекламный канал "
+                "нелицензированной площадки; перекрыть приём платежей."
+            ),
+            "action": (
+                f"Инициировать блокировку платёжных каналов бренда «{display}» через "
+                "банки/провайдеров; направить материалы."
+            ),
+            "priority": "high",
+            "evidence": f"{display}: {n} постов; площадки: {plats_txt}",
+            "score": _importance_score("high", scale),
+        })
+        recs.append({
+            "title": f"Takedown аккаунтов бренда «{display}»",
+            "rationale": (
+                f"Бренд «{display}» фигурирует в {n} постах на площадках ({plats_txt}) — "
+                "нужно снять контент и аккаунты, продвигающие нелегальную площадку."
+            ),
+            "action": (
+                f"Запросить takedown постов и аккаунтов бренда «{display}» у площадок "
+                f"({plats_txt})."
+            ),
+            "priority": "high",
+            "evidence": f"{display}: {n} постов; площадки: {plats_txt}",
+            "score": _importance_score("high", scale),
+        })
+    return recs
+
+
+def _focus_platform(conn: sqlite3.Connection, value: str) -> list[dict]:
+    """Рекомендации по ОДНОЙ площадке (матч регистронезависимо)."""
+    target = value.lower()
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS total,
+               SUM(CASE WHEN s.recommended_action = 'escalate' THEN 1 ELSE 0 END)
+                   AS escalated
+        FROM posts p JOIN scores s ON s.post_id = p.id
+        WHERE p.platform = ? COLLATE NOCASE
+        """,
+        (target,),
+    ).fetchone()
+    n = (row["total"] if row else 0) or 0
+    if n == 0:
+        return [_no_data_focus_rec(value, "platform")]
+    esc = (row["escalated"] or 0)
+    share = esc / n if n else 0.0
+    pct = round(share * 100)
+
+    # доминирующая категория-угроза на площадке.
+    cat_rows = conn.execute(
+        """
+        SELECT s.category AS category, COUNT(*) AS n
+        FROM posts p JOIN scores s ON s.post_id = p.id
+        WHERE p.platform = ? COLLATE NOCASE AND s.category != 'clean'
+        GROUP BY s.category
+        ORDER BY n DESC, s.category
+        """,
+        (target,),
+    ).fetchall()
+    if cat_rows:
+        dom_cat = cat_rows[0]["category"]
+        dom_n = cat_rows[0]["n"]
+        dom_label = _CAT_RU.get(dom_cat, dom_cat)
+    else:
+        dom_cat = None
+        dom_n = 0
+        dom_label = "—"
+
+    recs: list[dict] = [{
+        "title": f"Усилить мониторинг площадки {value}",
+        "rationale": (
+            f"На площадке {value}: {esc} из {n} постов уходят в эскалацию ({pct}%); "
+            f"доминирующая угроза — «{dom_label}» ({dom_n} постов)."
+        ),
+        "action": (
+            f"Усилить мониторинг площадки {value}; настроить приоритетную очередь по "
+            f"направлению «{dom_label}»."
+        ),
+        "priority": "high" if share >= 0.5 and esc >= 1 else "medium",
+        "evidence": f"{value}: {esc}/{n} escalate ({pct}%); доминирует {dom_label} ({dom_n})",
+        "score": _importance_score("high" if share >= 0.5 and esc >= 1 else "medium", share),
+    }, {
+        "title": f"Официальный запрос площадке {value}",
+        "rationale": (
+            f"Концентрация угрозы на площадке {value} ({esc}/{n} escalate, {pct}%) "
+            "требует официального взаимодействия с площадкой."
+        ),
+        "action": (
+            f"Направить площадке {value} официальный запрос на удаление противоправного "
+            f"контента (приоритет — «{dom_label}»)."
+        ),
+        "priority": "high" if share >= 0.5 and esc >= 1 else "medium",
+        "evidence": f"{value}: {esc}/{n} escalate ({pct}%)",
+        "score": _importance_score("high" if share >= 0.5 and esc >= 1 else "medium", share),
+    }]
+    return recs
+
+
+def _build_focused(conn: sqlite3.Connection, focus: dict) -> list[dict]:
+    """Узкая выдача по ОДНОЙ проблеме/источнику (focus={"kind","value"}).
+
+    Пересчитывает срез прямо из БД (read-only, параметризовано), формирует 1-5
+    точечных рекомендаций с цифрами и возвращает _rank_and_dedup(recs). Любая
+    ошибка / нулевой срез -> >=1 безопасный rec, без падения.
+    """
+    kind = focus["kind"]
+    value = focus["value"]
+    try:
+        if kind == "category":
+            recs = _focus_category(conn, value)
+        elif kind == "brand":
+            recs = _focus_brand(conn, value)
+        elif kind == "platform":
+            recs = _focus_platform(conn, value)
+        else:
+            recs = [_no_data_focus_rec(value, kind)]
+    except Exception:
+        recs = [_no_data_focus_rec(value, kind)]
+    if not recs:
+        recs = [_no_data_focus_rec(value, kind)]
+    return _rank_and_dedup(recs)
+
+
+# --- Источники для селектора фронта -------------------------------------------
+def available_sources(conn: "sqlite3.Connection | None" = None) -> dict:
+    """Доступные срезы для UI-селектора: категории-угрозы, бренды, площадки.
+
+    Standalone-safe (§0.2): conn=None -> своё соединение, закрыть в finally.
+    Никогда не бросает: на пустой/битой БД возвращает три ключа с пустыми списками.
+
+    Возвращает {"categories": [...], "brands": [...], "platforms": [...]}, где
+      categories: [{"id","label","count"}]  — только gambling/pyramid/fraud
+      brands:     [{"id","label","count","licensed"}]
+      platforms:  [{"id","label","count"}]
+    """
+    own_conn = conn is None
+    if own_conn:
+        conn = db.connect()
+    try:
+        return _available_sources(conn)
+    except Exception:
+        return {"categories": [], "brands": [], "platforms": []}
+    finally:
+        if own_conn:
+            conn.close()
+
+
+# Канонический порядок категорий-угроз (тай-брейкер при равном count).
+_THREAT_CATS = ("gambling", "pyramid", "fraud")
+
+
+def _available_sources(conn: sqlite3.Connection) -> dict:
+    agg = aggregate(conn)
+    by_category = agg["by_category"]
+    by_platform = agg["by_platform"]
+    top_brands = agg["top_brands"]
+
+    # категории-угрозы (исключаем clean), сортировка: count desc, затем канон. порядок.
+    cat_order = {c: i for i, c in enumerate(_THREAT_CATS)}
+    categories = [
+        {"id": c, "label": _CAT_RU.get(c, c), "count": int(by_category.get(c, 0))}
+        for c in _THREAT_CATS
+    ]
+    categories.sort(key=lambda d: (-d["count"], cat_order.get(d["id"], 99)))
+
+    # бренды из top_brands; licensed-флаг через is_licensed.
+    brands = [
+        {
+            "id": str(b.get("brand", "")).strip().lower(),
+            "label": b.get("brand", ""),
+            "count": int(b.get("count", 0)),
+            "licensed": bool(is_licensed(b.get("brand", ""))),
+        }
+        for b in top_brands
+    ]
+    brands.sort(key=lambda d: (-d["count"], d["label"].lower()))
+
+    # площадки из by_platform; count desc, затем имя.
+    platforms = [
+        {"id": p, "label": p, "count": int(c)}
+        for p, c in by_platform.items()
+    ]
+    platforms.sort(key=lambda d: (-d["count"], str(d["id"])))
+
+    return {"categories": categories, "brands": brands, "platforms": platforms}
+
+
+# --- АКТУАЛЬНЫЕ ПРОБЛЕМЫ («hotspots») — верхняя плашка дашборда ----------------
+def build_hotspots(conn: "sqlite3.Connection | None" = None, limit: int = 5) -> dict:
+    """«Самое опасное прямо сейчас» для верхней плашки дашборда.
+
+    Возвращает срезы, отсортированные по ОПАСНОСТИ (средний риск убыв., затем
+    объём), + готовые решения по самым горячим проблеме/конторе:
+      top_problems:  [{category, label, count, avg_risk, escalate_count}]
+      top_operators: [{brand, count, avg_risk, licensed}]
+      top_telegram:  [{channel, count, avg_risk}]
+      top_youtube:   [{channel, count, avg_risk}]
+      recommendations: [...]   # build_recommendations по топ-проблеме + топ-конторе
+
+    Standalone-safe (§0.2): conn=None -> своё соединение, закрыть в finally.
+    Никогда не бросает (R4): на пустой/битой БД -> все списки пустые.
+    """
+    own_conn = conn is None
+    if own_conn:
+        conn = db.connect()
+    try:
+        return _build_hotspots(conn, max(int(limit or 5), 1))
+    except Exception:
+        return {
+            "top_problems": [], "top_operators": [],
+            "top_telegram": [], "top_youtube": [], "recommendations": [],
+        }
+    finally:
+        if own_conn:
+            conn.close()
+
+
+def _build_hotspots(conn: sqlite3.Connection, limit: int) -> dict:
+    top_problems = _hotspot_problems(conn, limit)
+    top_operators = _hotspot_operators(conn, limit)
+    top_telegram = _hotspot_channels(conn, "telegram", limit)
+    top_youtube = _hotspot_channels(conn, "youtube", limit)
+
+    # Решения по самой горячей ПРОБЛЕМЕ и самой горячей КОНТОРЕ (объединяем+дедуп).
+    recs: list[dict] = []
+    if top_problems:
+        recs += build_recommendations(
+            conn, focus={"kind": "category", "value": top_problems[0]["category"]})
+    if top_operators:
+        recs += build_recommendations(
+            conn, focus={"kind": "brand", "value": top_operators[0]["brand"]})
+    if not recs:
+        recs = build_recommendations(conn)
+    # Контракт: не превышаем `limit` рекомендаций (верхняя плашка компактна).
+    recs = _rank_and_dedup(recs)[:limit]
+
+    return {
+        "top_problems": top_problems,
+        "top_operators": top_operators,
+        "top_telegram": top_telegram,
+        "top_youtube": top_youtube,
+        "recommendations": recs,
+    }
+
+
+def _hotspot_problems(conn: sqlite3.Connection, limit: int) -> list[dict]:
+    """Самые опасные категории-угрозы по среднему риску (clean исключён)."""
+    rows = conn.execute(
+        """
+        SELECT category,
+               COUNT(*) AS n,
+               AVG(risk) AS avg_risk,
+               SUM(CASE WHEN recommended_action = 'escalate' THEN 1 ELSE 0 END)
+                   AS escalate_count
+        FROM scores
+        WHERE category IN ('gambling', 'pyramid', 'fraud')
+        GROUP BY category
+        """
+    ).fetchall()
+    out = [
+        {
+            "category": r["category"],
+            "label": _CAT_RU.get(r["category"], r["category"]),
+            "count": int(r["n"] or 0),
+            # avg_risk — float c 1 знаком (контракт JSON: 0.0, не 0).
+            "avg_risk": round(float(r["avg_risk"] or 0), 1),
+            "escalate_count": int(r["escalate_count"] or 0),
+        }
+        for r in rows
+    ]
+    out.sort(key=lambda d: (-d["avg_risk"], -d["count"], d["category"]))
+    return out[:limit]
+
+
+def _hotspot_channels(conn: sqlite3.Connection, platform: str, limit: int) -> list[dict]:
+    """Самые опасные каналы площадки (группировка по author_handle) по ср. риску."""
+    rows = conn.execute(
+        """
+        SELECT p.author_handle AS channel,
+               COUNT(*) AS n,
+               AVG(s.risk) AS avg_risk
+        FROM posts p JOIN scores s ON s.post_id = p.id
+        WHERE p.platform = ? COLLATE NOCASE
+          AND p.author_handle IS NOT NULL AND TRIM(p.author_handle) != ''
+        GROUP BY p.author_handle
+        """,
+        (platform,),
+    ).fetchall()
+    out = [
+        {
+            "channel": r["channel"],
+            "count": int(r["n"] or 0),
+            "avg_risk": round(float(r["avg_risk"] or 0), 1),
+        }
+        for r in rows
+    ]
+    out.sort(key=lambda d: (-d["avg_risk"], -d["count"], str(d["channel"])))
+    return out[:limit]
+
+
+def _hotspot_operators(conn: sqlite3.Connection, limit: int) -> list[dict]:
+    """Самые опасные конторы (бренды) по среднему риску постов, где они упомянуты.
+
+    Бренды берём из extracted.entities_json (BRAND_ENTITY_TYPES); считаем уникальные
+    посты на бренд; средний риск — по scores этих постов; licensed — is_licensed.
+    """
+    risk_by_post = {
+        r["post_id"]: r["risk"]
+        for r in conn.execute("SELECT post_id, risk FROM scores")
+    }
+    # key (нормализованное имя) -> {"display", "posts": set}
+    brands: dict = {}
+    for r in conn.execute("SELECT post_id, entities_json FROM extracted"):
+        try:
+            ents = json.loads(r["entities_json"]) or []
+        except (TypeError, ValueError):
+            ents = []
+        if not isinstance(ents, list):
+            continue
+        seen_in_post: set = set()
+        for e in ents:
+            if not isinstance(e, dict) or e.get("type") not in BRAND_ENTITY_TYPES:
+                continue
+            norm = str(e.get("normalized") or e.get("value") or "").strip()
+            disp = str(e.get("value") or e.get("normalized") or "").strip()
+            if not norm:
+                continue
+            key = norm.lower()
+            if key in seen_in_post:
+                continue
+            seen_in_post.add(key)
+            slot = brands.setdefault(key, {"display": disp or norm, "posts": set()})
+            slot["posts"].add(r["post_id"])
+
+    out: list[dict] = []
+    for slot in brands.values():
+        posts = slot["posts"]
+        risks = [risk_by_post[p] for p in posts if p in risk_by_post and risk_by_post[p] is not None]
+        # avg_risk считаем ТОЛЬКО по постам со скором; нет скоренных -> 0.0 (float).
+        avg_risk = round(sum(risks) / len(risks), 1) if risks else 0.0
+        display = slot["display"]
+        out.append({
+            "brand": display,
+            "count": len(posts),
+            "avg_risk": avg_risk,
+            "licensed": bool(is_licensed(display)),
+        })
+    out.sort(key=lambda d: (-d["avg_risk"], -d["count"], d["brand"].lower()))
+    return out[:limit]
 
 
 def _default_monitoring_rec(total_posts: int, flagged: int) -> dict:
