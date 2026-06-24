@@ -4,6 +4,7 @@ GET    /api/watchlist            -> {"channels":[...]}
 POST   /api/watchlist            body {"channel": "..."}  -> {"channels":[...]}
 DELETE /api/watchlist/{channel}  -> {"channels":[...]}
 POST   /api/watchlist/scan       -> scan_watchlist(app.state.db) (added/flagged/channels)
+GET    /api/watchlist/stats      -> {"channels":[{channel,last_scan,last_added,last_flagged,total_collected}]}
 
 Ошибки никогда не всплывают как 500 — ловим и возвращаем структурный ответ.
 Русские пользовательские строки.
@@ -11,7 +12,7 @@ POST   /api/watchlist/scan       -> scan_watchlist(app.state.db) (added/flagged/
 
 from fastapi import APIRouter, Body, Request
 
-from app.watchlist import service, store
+from app.watchlist import service, stats, store
 
 router = APIRouter()
 
@@ -22,6 +23,15 @@ async def api_watchlist_list():
         return {"channels": store.list_channels()}
     except Exception as exc:
         return {"channels": [], "error": f"не удалось прочитать список: {exc}"}
+
+
+@router.get("/api/watchlist/stats")
+async def api_watchlist_stats():
+    """Per-channel статистика последнего скана (мониторинг-дашборд)."""
+    try:
+        return stats.get_stats()
+    except Exception as exc:
+        return {"channels": [], "error": f"не удалось прочитать статистику: {exc}"}
 
 
 @router.post("/api/watchlist")

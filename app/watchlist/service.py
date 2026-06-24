@@ -9,7 +9,7 @@ scan_telegram импортируется в namespace модуля, чтобы �
 """
 
 from app.ingestion.scan import scan_telegram
-from app.watchlist import store
+from app.watchlist import stats, store
 
 _EMPTY = {"added": 0, "flagged": 0, "channels": []}
 
@@ -38,4 +38,12 @@ def scan_watchlist(conn=None) -> dict:
     result.setdefault("added", 0)
     result.setdefault("flagged", 0)
     result.setdefault("channels", [])
+
+    # Фиксируем per-channel статистику скана (last_scan/added/flagged/total).
+    # Запись стат не должна валить скан — изолируем её сбои.
+    try:
+        stats.record_scan_result(result)
+    except Exception:  # noqa: BLE001 — мониторинг не критичнее самого скана
+        pass
+
     return result

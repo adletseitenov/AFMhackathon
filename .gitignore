@@ -44,3 +44,7 @@ koz-*.png
 Thumbs.db
 .vscode/
 .idea/
+
+# runtime watchlist state
+data/watchlist.json
+data/watchlist_stats.json

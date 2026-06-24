@@ -21,8 +21,12 @@ def _video_id(entry: dict) -> str:
 
 
 def search_youtube(query: str, limit: int = 5) -> list:
-    """`ytsearch{limit}:query` -> list[dict] настоящих видео. [] при ошибке/недоступности."""
+    """`ytsearch{limit}:query` -> list[dict] настоящих видео (дедуп по video_id).
+
+    Реальные превью i.ytimg.com сохраняются. [] при ошибке/недоступности.
+    """
     out: list = []
+    seen: set = set()
     try:
         import yt_dlp
 
@@ -33,8 +37,9 @@ def search_youtube(query: str, limit: int = 5) -> list:
             if not e:
                 continue
             vid = _video_id(e)
-            if not vid:
+            if not vid or vid in seen:
                 continue
+            seen.add(vid)
             out.append({
                 "platform": "youtube",
                 "url": f"https://www.youtube.com/watch?v={vid}",

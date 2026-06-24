@@ -42,6 +42,8 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
     queries = queries or DISCOVERY_QUERIES
     added = flagged = tg_added = 0
     samples: list = []
+    seen_urls: set = set()  # кросс-запросный дедуп url в пределах одного прогона
+    by_category: dict = {c: 0 for c in config.CATEGORIES if c != "clean"}
     n = len(queries)
 
     # 1) YouTube — реальные ролики с реальными ссылками.
@@ -55,8 +57,9 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
         for it in items:
             url = it.get("url")
             cap = normalize(it.get("caption") or "")
-            if not url or not cap:
+            if not url or not cap or url in seen_urls:
                 continue
+            seen_urls.add(url)
             pid = _pid("yt", url)
             if db.get_post(conn, pid) is not None:
                 continue
@@ -68,6 +71,8 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
             )
             sc = _ingest(conn, post, cap)
             added += 1
+            if sc.category in by_category:
+                by_category[sc.category] += 1
             if sc.risk >= config.ESCALATE_THRESHOLD:
                 flagged += 1
             samples.append({"url": url, "platform": "youtube", "risk": sc.risk, "category": sc.category})
@@ -98,4 +103,5 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
     return {
         "added": added + tg_added, "youtube_added": added, "telegram_added": tg_added,
         "flagged": flagged, "queries": n, "samples": samples[:10],
+        "by_category": by_category,
     }
