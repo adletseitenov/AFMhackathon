@@ -10,6 +10,7 @@
 import asyncio
 import importlib
 import json
+import os
 import pkgutil
 from contextlib import asynccontextmanager
 
@@ -99,15 +100,23 @@ DISCOVERY_INTERVAL_SEC = 1800
 
 
 def _discover_once() -> None:
-    """Один проход автономного поиска в отдельном потоке (своё соединение к БД)."""
+    """Один проход автономного поиска в отдельном потоке (своё соединение к БД).
+
+    env KOZ_DEEP_DISCOVER=1 включает глубокий разбор топ-1 свежего поста (реальные
+    Whisper+OCR+CLIP) — чтобы к показу в ленте были посты с заполненным блоком
+    доказательств без ручной 90-сек проверки. По умолчанию ВЫКЛ (без фоновых
+    загрузок видео); сбои разбора проглатываются внутри discover() (no-500)."""
     try:
         from app.discovery.discover import discover
 
+        deep = os.environ.get("KOZ_DEEP_DISCOVER", "") == "1"
         wconn = db.connect()
         try:
-            res = discover(wconn, with_telegram=False)  # YouTube; Telegram — через watchlist
+            # YouTube; Telegram — через watchlist
+            res = discover(wconn, with_telegram=False, deep=deep, deep_top=1)
             if res.get("added"):
-                print(f"[discovery] +{res['added']} реальных постов, флаг {res.get('flagged', 0)}")
+                tail = f", глубоко разобрано {res['deep_analyzed']}" if res.get("deep_analyzed") else ""
+                print(f"[discovery] +{res['added']} реальных постов, флаг {res.get('flagged', 0)}{tail}")
         finally:
             wconn.close()
     except Exception as e:
@@ -117,8 +126,6 @@ def _discover_once() -> None:
 async def _discovery_loop() -> None:
     """Фоновый автономный поиск. Включается env KOZ_AUTO_DISCOVER=1 (по умолчанию ВЫКЛ —
     тесты/офлайн не ходят в сеть; на боевом сервере run.bat включает)."""
-    import os
-
     if os.environ.get("KOZ_AUTO_DISCOVER", "") != "1":
         return
     try:
