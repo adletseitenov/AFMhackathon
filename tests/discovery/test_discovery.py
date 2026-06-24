@@ -390,3 +390,232 @@ def test_discover_video_links_cap_and_empty_on_failure(monkeypatch):
         raise RuntimeError("network down")
     monkeypatch.setattr(web, "_http_get", _boom)
     assert web.discover_video_links("q", "tiktok", limit=5) == []
+
+
+# --- Configurable autodiscovery: catalog registry + country/categories/live/sort ---
+
+import app.discovery.catalog as catalog  # noqa: E402
+import app.discovery.streaming as streaming  # noqa: E402
+
+
+def test_catalog_registry_shape():
+    """Реестр содержит обязательные id и форму {id:{label,..}}; build_queries есть."""
+    assert {"all", "kz", "ru"} <= set(catalog.COUNTRIES)
+    assert {"all", "casino", "pyramid", "fraud", "crypto"} <= set(catalog.CATEGORIES)
+    assert {"all", "video", "live"} <= set(catalog.CONTENT_TYPES)
+    assert {"relevance", "recent", "popular"} <= set(catalog.SORTS)
+    for plat in ("tiktok", "twitch", "kick", "instagram"):
+        assert plat in catalog.SEED_ACCOUNTS and catalog.SEED_ACCOUNTS[plat]
+    # каждая запись несёт человекочитаемый label
+    assert all("label" in v for v in catalog.COUNTRIES.values())
+    assert all("queries" in v for v in catalog.CATEGORIES.values())
+
+
+def test_catalog_payload_shape_matches_route_contract():
+    """catalog_payload() = тело GET /api/discover/catalog: списки {id,label}."""
+    p = catalog.catalog_payload()
+    assert set(p) == {"countries", "categories", "content_types", "sorts"}
+    for key in p:
+        assert isinstance(p[key], list) and p[key]
+        for item in p[key]:
+            assert set(item) == {"id", "label"}
+            assert isinstance(item["id"], str) and isinstance(item["label"], str)
+    ids = {i["id"] for i in p["categories"]}
+    assert {"all", "casino", "pyramid", "fraud", "crypto"} <= ids
+
+
+def test_build_queries_casino_only_is_subset_and_localized():
+    """categories=['casino'] -> только casino-запросы; country='kz' локализует их."""
+    casino = catalog.build_queries(country="all", categories=["casino"])
+    assert casino == catalog.CATEGORIES["casino"]["queries"]  # ровно casino, в порядке реестра
+    # 'all'-категория = объединение всех (casino входит подмножеством)
+    all_q = catalog.build_queries(country="all", categories=None)
+    assert set(casino) <= set(all_q)
+    assert set(catalog.CATEGORIES["pyramid"]["queries"]) <= set(all_q)
+    # gz-локализация добавляет гео-суффикс к каждому запросу
+    kz = catalog.build_queries(country="kz", categories=["casino"])
+    geo = catalog.COUNTRIES["kz"]["suffixes"][0]
+    assert len(kz) == len(casino)
+    assert all(geo in q.lower() for q in kz)
+
+
+def test_build_queries_unknown_category_falls_back_not_empty():
+    out = catalog.build_queries(country="all", categories=["does_not_exist"])
+    assert out == catalog.build_queries(country="all", categories=None)  # фоллбэк на все
+    assert out  # никогда не пусто
+
+
+def test_discover_categories_runs_only_casino_queries(tmp_path, monkeypatch):
+    """discover(categories=['casino']) гоняет ТОЛЬКО casino-запросы (проверяем q,
+    переданные в search_yt)."""
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "cat.db")
+    conn = db.connect(); db.init_db(conn)
+    seen_q = []
+
+    def _spy_yt(q, limit):
+        seen_q.append(q)
+        return []  # ингест не важен — проверяем именно набор запросов
+
+    discovery.discover(conn, per_query=1, search_yt=_spy_yt, with_telegram=False,
+                       platform="youtube", categories=["casino"])
+    assert seen_q == catalog.CATEGORIES["casino"]["queries"]
+    # pyramid-запрос НЕ должен попасть в прогон
+    assert "пирамида заработок без вложений" not in seen_q
+
+
+def test_discover_country_localizes_queries(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "geo.db")
+    conn = db.connect(); db.init_db(conn)
+    seen_q = []
+    monkeypatch.setattr(discovery, "score_post", _fake_score)
+
+    def _spy_yt(q, limit):
+        seen_q.append(q)
+        return []
+
+    discovery.discover(conn, per_query=1, search_yt=_spy_yt, with_telegram=False,
+                       platform="youtube", country="kz", categories=["casino"])
+    geo = catalog.COUNTRIES["kz"]["suffixes"][0]
+    assert seen_q and all(geo in q.lower() for q in seen_q)
+
+
+def test_discover_explicit_queries_override_catalog(tmp_path, monkeypatch):
+    """Явный queries имеет приоритет над country/categories."""
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "ovr.db")
+    conn = db.connect(); db.init_db(conn)
+    seen_q = []
+
+    def _spy_yt(q, limit):
+        seen_q.append(q)
+        return []
+
+    discovery.discover(conn, queries=["МОЙ_ЗАПРОС"], per_query=1, search_yt=_spy_yt,
+                       with_telegram=False, platform="youtube", categories=["casino"])
+    assert seen_q == ["МОЙ_ЗАПРОС"]
+
+
+def test_discover_live_ingests_only_in_air_with_flag(tmp_path, monkeypatch):
+    """content_type='live' зовёт streaming_mod.fetch_live по сид-аккаунтам и
+    ингестит ТОЛЬКО тех, кто СЕЙЧАС в эфире (live=True), пост помечен флагом live."""
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "live.db")
+    conn = db.connect(); db.init_db(conn)
+    monkeypatch.setattr(discovery, "score_post", _fake_score)
+    # три стримера: один в эфире, один оффлайн (None), один без флага live
+    monkeypatch.setattr(discovery, "_TWITCH_SEED_STREAMERS",
+                        ["live_one", "offline_two", "stale_three"])
+
+    calls = {"args": []}
+
+    def _fake_live(platform, account):
+        calls["args"].append((platform, account))
+        if account == "live_one":
+            return {"url": "https://www.twitch.tv/live_one",
+                    "title": "Казино занос прямо сейчас",
+                    "description": "Казино занос прямо сейчас",
+                    "author_handle": account, "thumb_url": "https://t/x.jpg",
+                    "view_count": 4321, "live": True}
+        if account == "offline_two":
+            return None  # оффлайн -> не ингестим
+        return {"url": "https://www.twitch.tv/stale_three", "title": "x",
+                "author_handle": account, "live": False}  # не в эфире -> пропуск
+
+    monkeypatch.setattr(streaming, "fetch_live", _fake_live)
+
+    res = discovery.discover(conn, per_query=1, search_yt=_fake_yt,
+                             with_telegram=False, platform="twitch",
+                             content_type="live")
+    # fetch_live спрошен по всем трём аккаунтам, на эфирной площадке twitch
+    assert calls["args"] == [("twitch", "live_one"),
+                             ("twitch", "offline_two"),
+                             ("twitch", "stale_three")]
+    assert res["content_type"] == "live"
+    assert res["live_added"] == 1  # только тот, кто в эфире
+    assert res["platform_added"] == 1
+    assert res["youtube_added"] == 0  # ytsearch для live не используется
+    # в ленту попал ровно один live-пост с правильным url
+    rows = conn.execute("SELECT url, platform, source FROM posts").fetchall()
+    assert len(rows) == 1
+    assert rows[0]["url"] == "https://www.twitch.tv/live_one"
+    assert rows[0]["platform"] == "twitch"
+    # sample несёт флаг live=True
+    live_samples = [s for s in res["samples"] if s.get("live")]
+    assert len(live_samples) == 1 and live_samples[0]["url"] == "https://www.twitch.tv/live_one"
+
+
+def test_discover_live_none_when_nobody_in_air(tmp_path, monkeypatch):
+    """Эфирный режим: никто не в эфире -> live_added=0 + честная нота (не сбой)."""
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "liveempty.db")
+    conn = db.connect(); db.init_db(conn)
+    monkeypatch.setattr(discovery, "score_post", _fake_score)
+    monkeypatch.setattr(discovery, "_KICK_SEED_STREAMERS", ["a", "b"])
+    monkeypatch.setattr(streaming, "fetch_live", lambda platform, account: None)
+
+    res = discovery.discover(conn, per_query=1, search_yt=_fake_yt,
+                             with_telegram=False, platform="kick",
+                             content_type="live")
+    assert res["live_added"] == 0
+    assert "note" in res and "эфир" in res["note"].lower()
+
+
+def test_discover_sort_popular_orders_by_view_count(tmp_path, monkeypatch):
+    """sort='popular' ингестит элементы по убыванию view_count (порядок появления
+    в ленте/samples). Проверяем на tiktok-аккаунте (list_account_posts)."""
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "sortpop.db")
+    conn = db.connect(); db.init_db(conn)
+    import app.ingestion.fetch as fetch_mod
+    monkeypatch.setattr(discovery, "score_post", _fake_score)
+    monkeypatch.setattr(discovery, "_TIKTOK_SEED_ACCOUNTS", ["promo"])
+
+    def _fake_posts(account_url, limit=12):
+        # намеренно НЕ по убыванию просмотров — sort='popular' должен переставить
+        return [
+            {"url": "https://www.tiktok.com/@promo/video/low",
+             "title": "казино занос", "description": "казино занос",
+             "author_handle": "promo", "thumb_url": "", "view_count": 10},
+            {"url": "https://www.tiktok.com/@promo/video/high",
+             "title": "казино занос", "description": "казино занос",
+             "author_handle": "promo", "thumb_url": "", "view_count": 9000},
+            {"url": "https://www.tiktok.com/@promo/video/mid",
+             "title": "казино занос", "description": "казино занос",
+             "author_handle": "promo", "thumb_url": "", "view_count": 500},
+        ]
+
+    monkeypatch.setattr(fetch_mod, "list_account_posts", _fake_posts)
+
+    res = discovery.discover(conn, per_query=1, search_yt=_fake_yt,
+                             with_telegram=False, platform="tiktok",
+                             sort="popular")
+    assert res["sort"] == "popular"
+    # порядок samples = порядок ингеста = по убыванию view_count
+    order = [s["url"] for s in res["samples"]]
+    assert order == [
+        "https://www.tiktok.com/@promo/video/high",
+        "https://www.tiktok.com/@promo/video/mid",
+        "https://www.tiktok.com/@promo/video/low",
+    ]
+
+
+def test_discover_sort_relevance_keeps_source_order(tmp_path, monkeypatch):
+    """sort='relevance' (по умолчанию) сохраняет порядок выдачи источника."""
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "sortrel.db")
+    conn = db.connect(); db.init_db(conn)
+    import app.ingestion.fetch as fetch_mod
+    monkeypatch.setattr(discovery, "score_post", _fake_score)
+    monkeypatch.setattr(discovery, "_TIKTOK_SEED_ACCOUNTS", ["promo"])
+
+    def _fake_posts(account_url, limit=12):
+        return [
+            {"url": "https://www.tiktok.com/@promo/video/a", "title": "казино",
+             "description": "казино", "author_handle": "promo", "thumb_url": "",
+             "view_count": 1},
+            {"url": "https://www.tiktok.com/@promo/video/b", "title": "казино",
+             "description": "казино", "author_handle": "promo", "thumb_url": "",
+             "view_count": 999},
+        ]
+
+    monkeypatch.setattr(fetch_mod, "list_account_posts", _fake_posts)
+    res = discovery.discover(conn, per_query=1, search_yt=_fake_yt,
+                             with_telegram=False, platform="tiktok", sort="relevance")
+    order = [s["url"] for s in res["samples"]]
+    assert order == ["https://www.tiktok.com/@promo/video/a",
+                     "https://www.tiktok.com/@promo/video/b"]

@@ -35,6 +35,7 @@ import app.extractors.pipeline as pipeline_mod
 import app.ingestion.fetch as fetch_mod
 import app.jobs.worker as jobs
 from app import config, db
+from app.analytics.recommend import recommendations_for_post
 from app.decision.explain import explain
 from app.decision.licensed import (
     COMPLIANCE_HINT,
@@ -186,6 +187,10 @@ def api_post_detail(request: Request, post_id: str):
     post_dict = _post_dict(p, licensed_text=licensed_text)
     is_licensed = post_dict["licensed"]
 
+    # ТОЧЕЧНЫЕ рекомендации под этот кейс (rule-based, без побочных эффектов).
+    # risk/score/recommended_action НЕ меняем — это отдельное доп. поле.
+    case_recs = recommendations_for_post(conn, post_dict, score)
+
     return {
         "post": post_dict,
         "extracted": asdict(e) if e is not None else None,
@@ -195,6 +200,8 @@ def api_post_detail(request: Request, post_id: str):
         # Подсказка по рекламным нормам + дисклеймер реестра — только когда лицензирован.
         "licensed_note": COMPLIANCE_HINT if is_licensed else "",
         "licensed_disclaimer": REGISTRY_DISCLAIMER if is_licensed else "",
+        # Точечные рекомендации именно для этого кейса (2-5, отсортированы по важности).
+        "case_recommendations": case_recs,
     }
 
 

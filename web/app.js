@@ -156,6 +156,18 @@ function kozApp() {
       { id: "kick",      label: "Kick" },
     ],
 
+    // --- настраиваемые фильтры автопоиска (GET /api/discover/catalog) ---
+    // Селекторы наполняются с бэка; пока каталог не загружен — безопасные дефолты.
+    discoverCountry: "kz",          // одиночный выбор (страна)
+    discoverCategories: [],          // мульти-выбор (категории); []/['all'] = все
+    discoverContentType: "all",      // all | video | live
+    discoverSort: "relevance",       // relevance | recent | popular
+    catalogCountries: [{ id: "kz", label: "Казахстан" }, { id: "ru", label: "Россия" }, { id: "all", label: "Все страны" }],
+    catalogCategories: [{ id: "all", label: "Все категории" }],
+    catalogContentTypes: [{ id: "all", label: "Все" }, { id: "video", label: "VOD/посты" }, { id: "live", label: "Прямые эфиры" }],
+    catalogSorts: [{ id: "relevance", label: "по релевантности" }, { id: "recent", label: "по новизне" }, { id: "popular", label: "по популярности" }],
+    _catalogLoaded: false,
+
     // --- telegram scanner (Лента) ---
     scanInput: "",
     scanning: false,
@@ -238,11 +250,59 @@ function kozApp() {
     // ===================================================== lifecycle
     init() {
       this.loadMetrics();
+      this.loadCatalog();
       this.loadFeed();
       this.loadFeedbackStats();
       this._pollTimer = setInterval(() => {
         if (this.tab === "feed" && this.feedMode === "queue") this.loadFeed();
       }, 2000);
+    },
+
+    // Каталог настраиваемых фильтров автопоиска. GET /api/discover/catalog ->
+    // {countries:[{id,label}], categories:[...], content_types:[...], sorts:[...]}.
+    // Если эндпоинт недоступен (старый бэк) — молча оставляем встроенные дефолты,
+    // селекторы всё равно рабочие. Применяем только непустые списки.
+    async loadCatalog() {
+      if (this._catalogLoaded) return;
+      try {
+        const r = await fetch("/api/discover/catalog");
+        if (!r.ok) return;
+        const c = await r.json();
+        if (c && Array.isArray(c.countries) && c.countries.length) {
+          this.catalogCountries = c.countries;
+          if (!c.countries.some((x) => x.id === this.discoverCountry)) {
+            this.discoverCountry = c.countries[0].id;
+          }
+        }
+        if (c && Array.isArray(c.categories) && c.categories.length) {
+          this.catalogCategories = c.categories;
+        }
+        if (c && Array.isArray(c.content_types) && c.content_types.length) {
+          this.catalogContentTypes = c.content_types;
+          if (!c.content_types.some((x) => x.id === this.discoverContentType)) {
+            this.discoverContentType = c.content_types[0].id;
+          }
+        }
+        if (c && Array.isArray(c.sorts) && c.sorts.length) {
+          this.catalogSorts = c.sorts;
+          if (!c.sorts.some((x) => x.id === this.discoverSort)) {
+            this.discoverSort = c.sorts[0].id;
+          }
+        }
+        this._catalogLoaded = true;
+      } catch (_) {
+        /* offline / старый бэк — оставляем встроенные дефолты */
+      }
+    },
+
+    // Переключатель категории в мульти-выборе автопоиска.
+    toggleDiscoverCategory(id) {
+      const i = this.discoverCategories.indexOf(id);
+      if (i >= 0) this.discoverCategories.splice(i, 1);
+      else this.discoverCategories.push(id);
+    },
+    isDiscoverCategory(id) {
+      return this.discoverCategories.indexOf(id) >= 0;
     },
 
     setTab(id) {
@@ -364,6 +424,11 @@ function kozApp() {
             platform: platform,
             deep: this.discoverDeep,
             with_telegram: withTelegram,
+            // настраиваемые фильтры автопоиска (бэк дополняет existing-поля)
+            country: this.discoverCountry,
+            categories: this.discoverCategories,
+            content_type: this.discoverContentType,
+            sort: this.discoverSort,
           }),
         });
         if (!r.ok) {
@@ -778,6 +843,14 @@ function kozApp() {
       if (p === "high")   return "высокий";
       if (p === "medium") return "средний";
       return "низкий";
+    },
+
+    // Точечные рекомендации по открытому кейсу (GET /api/post -> case_recommendations).
+    // Массив {title, rationale, action, priority}; пустой/отсутствует -> [].
+    get caseRecs() {
+      return (this.detail && Array.isArray(this.detail.case_recommendations))
+        ? this.detail.case_recommendations
+        : [];
     },
 
     _chart(id, config) {
@@ -1215,6 +1288,9 @@ function kozApp() {
     // Происхождение поста (источник) -> человекочитаемая метка для бейджа.
     sourceLabel(s) { return SOURCE_LABELS[(s || "").toLowerCase()] || "источник"; },
     sourceIcon(s) { return SOURCE_ICONS[(s || "").toLowerCase()] || "ph-circle"; },
+
+    // Пост идёт прямым эфиром (флаг post.live от бэка) — рисуем бейдж «прямой эфир».
+    isLive(post) { return !!(post && post.live); },
 
     // Есть ли у поста реальная ссылка http(s) для кликабельного перехода.
     hasRealUrl(post) {

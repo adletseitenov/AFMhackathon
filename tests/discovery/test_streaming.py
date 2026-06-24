@@ -273,3 +273,312 @@ def test_platform_twitch_skips_youtube_and_telegram(tmp_path, monkeypatch):
     assert called["tg"] is False
     assert res["youtube_added"] == 0
     assert res["telegram_added"] == 0
+
+
+# --- Twitch: фоллбэк на КЛИПЫ когда /videos пуст (VOD истекли) ---
+
+def _ydl_factory(routes):
+    """Строит фейковый yt_dlp-модуль: routes = {substr_in_url: info_dict|Exception}.
+    extract_info матчит по подстроке url; нет совпадения -> {} (пустой плейлист)."""
+    import types
+
+    class _YDL:
+        def __init__(self, opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=False):
+            for sub, info in routes.items():
+                if sub in url:
+                    if isinstance(info, Exception):
+                        raise info
+                    return info
+            return {}
+
+    fake = types.ModuleType("yt_dlp")
+    fake.YoutubeDL = _YDL
+    return fake
+
+
+def test_fetch_twitch_videos_falls_back_to_clips(monkeypatch):
+    """Когда /videos пуст (entries=[]), сборщик пробует /clips и маппит их."""
+    import sys
+
+    routes = {
+        "/videos": {"entries": []},  # VOD истекли
+        "/clips": {"entries": [
+            {"url": "https://clips.twitch.tv/AbcClip",
+             "title": "Big slots win STAKE",
+             "view_count": 321,
+             "thumbnails": [{"url": "https://twitch.thumb/clip.jpg"}]},
+        ]},
+    }
+    monkeypatch.setitem(sys.modules, "yt_dlp", _ydl_factory(routes))
+    out = streaming.fetch_twitch_videos("xposed", limit=5)
+    assert len(out) == 1
+    v = out[0]
+    assert v["url"] == "https://clips.twitch.tv/AbcClip"
+    assert v["title"] == "Big slots win STAKE"
+    assert v["author_handle"] == "xposed"
+    assert v["thumb_url"] == "https://twitch.thumb/clip.jpg"
+    assert v["view_count"] == 321
+    assert v.get("live") in (False, None)
+
+
+def test_fetch_twitch_videos_prefers_vods_over_clips(monkeypatch):
+    """Когда /videos НЕпуст, клипы не запрашиваются (VOD приоритетнее)."""
+    import sys
+
+    routes = {
+        "/videos": {"entries": [
+            {"url": "https://www.twitch.tv/videos/777",
+             "title": "VOD slots", "view_count": 10, "thumbnails": []},
+        ]},
+        "/clips": {"entries": [
+            {"url": "https://clips.twitch.tv/SHOULDNOTSHOW",
+             "title": "clip", "view_count": 1, "thumbnails": []},
+        ]},
+    }
+    monkeypatch.setitem(sys.modules, "yt_dlp", _ydl_factory(routes))
+    out = streaming.fetch_twitch_videos("xposed", limit=5)
+    assert len(out) == 1
+    assert out[0]["url"] == "https://www.twitch.tv/videos/777"
+
+
+# --- fetch_instagram_posts (НОВ, best-effort) ---
+
+def test_fetch_instagram_posts_empty_on_failure(monkeypatch):
+    """Логин-вол/ошибка yt-dlp -> [] (вызывающий покажет честную ноту)."""
+    import sys
+    import types
+
+    class _BoomYDL:
+        def __init__(self, opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=False):
+            raise RuntimeError("login required")
+
+    fake = types.ModuleType("yt_dlp")
+    fake.YoutubeDL = _BoomYDL
+    monkeypatch.setitem(sys.modules, "yt_dlp", fake)
+    assert streaming.fetch_instagram_posts("nasa", limit=5) == []
+
+
+def test_fetch_instagram_posts_maps_entries(monkeypatch):
+    """Публичные reels/посты -> нормализованный dict (live=False)."""
+    import sys
+    import types
+
+    class _YDL:
+        def __init__(self, opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=False):
+            return {"entries": [
+                {"url": "https://www.instagram.com/reel/AAA/",
+                 "title": "casino promo reel",
+                 "description": "занос казино 1xbet",
+                 "uploader": "scam_acc",
+                 "view_count": 555,
+                 "thumbnails": [{"url": "https://ig.thumb/a.jpg"}]},
+                {"webpage_url": "https://www.instagram.com/p/BBB/",
+                 "title": "", "description": "",
+                 "view_count": None, "thumbnails": []},
+            ]}
+
+    fake = types.ModuleType("yt_dlp")
+    fake.YoutubeDL = _YDL
+    monkeypatch.setitem(sys.modules, "yt_dlp", fake)
+
+    out = streaming.fetch_instagram_posts("scam_acc", limit=5)
+    assert len(out) == 2
+    v = out[0]
+    assert v["url"] == "https://www.instagram.com/reel/AAA/"
+    assert v["title"] == "casino promo reel"
+    assert v["description"] == "занос казино 1xbet"
+    assert v["author_handle"] == "scam_acc"
+    assert v["thumb_url"] == "https://ig.thumb/a.jpg"
+    assert v["view_count"] == 555
+    assert v["live"] is False
+    # второй пост: пустой view_count -> 0, url из webpage_url
+    assert out[1]["url"] == "https://www.instagram.com/p/BBB/"
+    assert out[1]["view_count"] == 0
+
+
+# --- fetch_live (НОВ): детект прямых эфиров по площадкам ---
+
+def test_fetch_live_twitch_online(monkeypatch):
+    """twitch:stream отдаёт инфо живого эфира -> dict с live=True."""
+    import sys
+
+    routes = {"twitch.tv/roshtein": {
+        "title": "LIVE BONUS HUNT $10000",
+        "is_live": True,
+        "view_count": 4200,
+        "uploader": "Roshtein",
+        "thumbnail": "https://twitch.thumb/live.jpg",
+        "webpage_url": "https://www.twitch.tv/roshtein",
+    }}
+    monkeypatch.setitem(sys.modules, "yt_dlp", _ydl_factory(routes))
+    d = streaming.fetch_live("twitch", "roshtein")
+    assert d is not None
+    assert d["live"] is True
+    assert d["title"] == "LIVE BONUS HUNT $10000"
+    assert d["author_handle"] == "roshtein"
+    assert d["view_count"] == 4200
+    assert d["url"] == "https://www.twitch.tv/roshtein"
+    assert d["thumb_url"] == "https://twitch.thumb/live.jpg"
+
+
+def test_fetch_live_twitch_offline_returns_none(monkeypatch):
+    """Оффлайн ('not currently live')/ошибка -> None."""
+    import sys
+
+    routes = {"twitch.tv/xposed": RuntimeError(
+        "xposed is offline: The channel is not currently live")}
+    monkeypatch.setitem(sys.modules, "yt_dlp", _ydl_factory(routes))
+    assert streaming.fetch_live("twitch", "xposed") is None
+
+
+def test_fetch_live_kick_online(monkeypatch):
+    """Kick API: поле livestream непусто -> dict live=True (title=session_title)."""
+    import sys
+    import types
+
+    class _Resp:
+        def json(self):
+            return {"slug": "roshtein", "livestream": {
+                "session_title": "BONUS HUNT live STAKE",
+                "viewer_count": 8800,
+                "thumbnail": {"url": "https://kick.thumb/live.jpg"},
+            }}
+
+    fake = types.ModuleType("curl_cffi")
+    fake_requests = types.ModuleType("curl_cffi.requests")
+    fake_requests.get = lambda url, **k: _Resp()
+    fake.requests = fake_requests
+    monkeypatch.setitem(sys.modules, "curl_cffi", fake)
+    monkeypatch.setitem(sys.modules, "curl_cffi.requests", fake_requests)
+
+    d = streaming.fetch_live("kick", "roshtein")
+    assert d is not None
+    assert d["live"] is True
+    assert d["title"] == "BONUS HUNT live STAKE"
+    assert d["view_count"] == 8800
+    assert d["author_handle"] == "roshtein"
+    assert d["url"] == "https://kick.com/roshtein"
+    assert d["thumb_url"] == "https://kick.thumb/live.jpg"
+
+
+def test_fetch_live_kick_offline_returns_none(monkeypatch):
+    """Kick: livestream=null (оффлайн) -> None."""
+    import sys
+    import types
+
+    class _Resp:
+        def json(self):
+            return {"slug": "xposed", "livestream": None}
+
+    fake = types.ModuleType("curl_cffi")
+    fake_requests = types.ModuleType("curl_cffi.requests")
+    fake_requests.get = lambda url, **k: _Resp()
+    fake.requests = fake_requests
+    monkeypatch.setitem(sys.modules, "curl_cffi", fake)
+    monkeypatch.setitem(sys.modules, "curl_cffi.requests", fake_requests)
+
+    assert streaming.fetch_live("kick", "xposed") is None
+
+
+def test_fetch_live_kick_error_returns_none(monkeypatch):
+    """Kick: сеть упала -> None (не пробрасывает)."""
+    import sys
+    import types
+
+    def _boom(*a, **k):
+        raise RuntimeError("network down")
+
+    fake = types.ModuleType("curl_cffi")
+    fake_requests = types.ModuleType("curl_cffi.requests")
+    fake_requests.get = _boom
+    fake.requests = fake_requests
+    monkeypatch.setitem(sys.modules, "curl_cffi", fake)
+    monkeypatch.setitem(sys.modules, "curl_cffi.requests", fake_requests)
+
+    assert streaming.fetch_live("kick", "roshtein") is None
+
+
+def test_fetch_live_tiktok_online(monkeypatch):
+    """tiktok:live отдаёт инфо эфира -> dict live=True."""
+    import sys
+
+    routes = {"tiktok.com/@casinoman/live": {
+        "title": "Казино прямой эфир занос",
+        "view_count": 1200,
+        "uploader": "casinoman",
+        "thumbnail": "https://tt.thumb/live.jpg",
+        "webpage_url": "https://www.tiktok.com/@casinoman/live",
+    }}
+    monkeypatch.setitem(sys.modules, "yt_dlp", _ydl_factory(routes))
+    d = streaming.fetch_live("tiktok", "casinoman")
+    assert d is not None
+    assert d["live"] is True
+    assert d["title"] == "Казино прямой эфир занос"
+    assert d["author_handle"] == "casinoman"
+    assert d["view_count"] == 1200
+
+
+def test_fetch_live_tiktok_offline_returns_none(monkeypatch):
+    """TikTok оффлайн -> None."""
+    import sys
+
+    routes = {"tiktok.com/@x/live": RuntimeError(
+        "The user is not currently live")}
+    monkeypatch.setitem(sys.modules, "yt_dlp", _ydl_factory(routes))
+    assert streaming.fetch_live("tiktok", "x") is None
+
+
+def test_fetch_live_instagram_best_effort_none(monkeypatch):
+    """Instagram закрыт логин-волом -> обычно None (best-effort)."""
+    import sys
+    import types
+
+    class _BoomYDL:
+        def __init__(self, opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=False):
+            raise RuntimeError("login required")
+
+    fake = types.ModuleType("yt_dlp")
+    fake.YoutubeDL = _BoomYDL
+    monkeypatch.setitem(sys.modules, "yt_dlp", fake)
+    assert streaming.fetch_live("instagram", "someacc") is None
+
+
+def test_fetch_live_unknown_platform_returns_none():
+    """Неизвестная площадка -> None (не падает)."""
+    assert streaming.fetch_live("myspace", "anyone") is None

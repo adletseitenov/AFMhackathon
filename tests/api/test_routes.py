@@ -314,7 +314,13 @@ def test_post_detail_shape(detail_client):
     data = resp.json()
     assert set(data.keys()) == {
         "post", "extracted", "score", "explanation", "recommended_action",
-        "licensed_note", "licensed_disclaimer"}
+        "licensed_note", "licensed_disclaimer", "case_recommendations"}
+    # case_recommendations: список точечных рекомендаций под этот кейс (2-5).
+    assert isinstance(data["case_recommendations"], list)
+    assert 1 <= len(data["case_recommendations"]) <= 5
+    for r in data["case_recommendations"]:
+        assert {"title", "rationale", "action", "priority", "evidence"}.issubset(r)
+        assert r["priority"] in {"high", "medium", "low"}
     assert data["post"]["id"] == "p1"
     assert data["extracted"]["ocr_text"] == "OCR казино"
     assert data["extracted"]["visual_concepts"][0]["label"] == "casino"

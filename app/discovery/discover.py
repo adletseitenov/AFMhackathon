@@ -9,6 +9,7 @@ Telegram-каналы через веб-поиск), скорит собстве
 import hashlib
 from datetime import datetime, timezone
 
+import app.discovery.catalog as catalog
 import app.discovery.streaming as streaming_mod
 import app.extractors.pipeline as pipeline_mod
 import app.ingestion.fetch as fetch_mod
@@ -28,29 +29,18 @@ _VIDEO_PLATFORMS = {"tiktok", "instagram"}
 # источник: VOD-ы курируемых стримеров казино/слотов через app.discovery.streaming.
 _STREAMING_PLATFORMS = {"twitch", "kick"}
 
-# Курируемые гемблинг-стримеры: их VOD-заголовки (slots/casino/BONUS HUNT под
-# STAKE/roobet) — нелегальная реклама казино в РК. Имя стримера + заголовок дают
-# сигнал казино при скоринге. Списки можно monkeypatch'ить в тестах.
-_TWITCH_SEED_STREAMERS = [
-    "xposed", "roshtein", "classybeef", "trainwreckstv", "ayezee",
-]
-_KICK_SEED_STREAMERS = [
-    "roshtein", "xposed", "trainwreck", "classybeef", "slots",
-]
+# Площадки, поддерживающие проверку ПРЯМОГО ЭФИРА (content_type="live") через
+# streaming_mod.fetch_live(platform, account) — ингестим только тех, кто СЕЙЧАС в эфире.
+_LIVE_PLATFORMS = {"tiktok", "twitch", "kick", "instagram"}
 
-# Поисковики НЕ индексируют отдельные tiktok/instagram-видео (и DDG-выдача
-# часто недоступна), поэтому надёжный путь — нативный yt-dlp по странице
-# АККАУНТА (как watchlist у Telegram). Курируемый список аккаунтов казино/
-# букмекеров/HYIP, чья реклама в РК нелегальна (проверено: yt-dlp отдаёт их ленту).
-_TIKTOK_SEED_ACCOUNTS = [
-    "mostbet_official", "1win", "parimatch", "olimpbet", "betboom",
-    "1xbet_global", "betwinner", "1win_casino", "olimp",
-]
-# Instagram через yt-dlp закрыт логин-волом (extract data fails) — публичный
-# автопоиск без входа невозможен; список оставлен как best-effort на будущее.
-_INSTAGRAM_SEED_ACCOUNTS = [
-    "1xbet", "mostbet", "parimatch",
-]
+# Сид-аккаунты/стримеры — ЕДИНЫЙ источник истины: app/discovery/catalog.py.
+# Дублируем в module-level имена, чтобы остались монкипатч-семы существующих тестов
+# (tests monkeypatch d._TIKTOK_SEED_ACCOUNTS / d._KICK_SEED_STREAMERS / ...).
+# Имя стримера + заголовок дают сигнал казино при скоринге.
+_TWITCH_SEED_STREAMERS = list(catalog.SEED_ACCOUNTS["twitch"])
+_KICK_SEED_STREAMERS = list(catalog.SEED_ACCOUNTS["kick"])
+_TIKTOK_SEED_ACCOUNTS = list(catalog.SEED_ACCOUNTS["tiktok"])
+_INSTAGRAM_SEED_ACCOUNTS = list(catalog.SEED_ACCOUNTS["instagram"])
 
 # Telegram: DDG-поиск каналов часто недоступен (таймаут), поэтому база — курируемые
 # публичные казино/букмекер-каналы (скан через t.me/s/ web-preview), а ДАЛЬШЕ
@@ -70,6 +60,33 @@ def _account_url(platform: str, handle: str) -> str:
 
 def _pid(prefix: str, key: str) -> str:
     return f"{prefix}_" + hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
+
+
+def _sort_key_recent(item: dict):
+    """Ключ свежести: дата публикации (timestamp/upload_date/posted_at), новее
+    раньше. Отсутствие даты -> в конец. Строки сравнимы лексикографически
+    (ISO-дата) — берём сырое значение, чтобы не падать на форматах."""
+    for k in ("timestamp", "upload_date", "posted_at", "date"):
+        v = item.get(k)
+        if v:
+            return (1, str(v))
+    return (0, "")
+
+
+def _sort_items(items: list, sort: str) -> list:
+    """Упорядочивает найденные элементы перед ингестом.
+
+    relevance -> как есть (порядок выдачи источника). recent -> сначала свежие
+    (по дате публикации). popular -> по убыванию view_count. Сортировка
+    СТАБИЛЬНА (сохраняет исходный порядок при равенстве)."""
+    if not items:
+        return items
+    s = (sort or "relevance").lower().strip()
+    if s == "popular":
+        return sorted(items, key=lambda it: int(it.get("view_count") or 0), reverse=True)
+    if s == "recent":
+        return sorted(items, key=_sort_key_recent, reverse=True)
+    return items
 
 
 def _ingest(conn, post: Post, cap: str, score_text: "str | None" = None):
@@ -95,7 +112,7 @@ def _platform_accounts(platform: str) -> list:
 
 def _ingest_video_platform(conn, platform: str, accounts: list, per_account: int,
                            seen_urls: set, by_category: dict, samples: list,
-                           fresh_out: list, report=None) -> dict:
+                           fresh_out: list, report=None, sort: str = "relevance") -> dict:
     """Автопоиск опасных видео на tiktok/instagram через РЕАЛЬНЫЙ yt-dlp по
     курируемым аккаунтам казино/букмекеров (поисковики такие видео не индексируют).
 
@@ -119,6 +136,7 @@ def _ingest_video_platform(conn, platform: str, accounts: list, per_account: int
         if posts:
             accounts_ok += 1
             found += len(posts)
+        posts = _sort_items(posts, sort)
         for p in posts:
             url = p.get("url")
             if not url or url in seen_urls:
@@ -173,7 +191,7 @@ def _fetch_streaming(platform: str, streamer: str, per_streamer: int) -> list:
 
 def _ingest_streaming(conn, platform: str, streamers: list, per_streamer: int,
                       seen_urls: set, by_category: dict, samples: list,
-                      fresh_out: list, report=None) -> dict:
+                      fresh_out: list, report=None, sort: str = "relevance") -> dict:
     """Автопоиск гемблинг-контента на TWITCH/KICK по курируемым стримерам казино/слотов.
 
     Для каждого стримера тянем VOD-ы (streaming_mod.fetch_kick_videos /
@@ -188,7 +206,7 @@ def _ingest_streaming(conn, platform: str, streamers: list, per_streamer: int,
     for i, streamer in enumerate(streamers):
         if report:
             report(f"{platform}: {streamer}", 5 + int(70 * i / n))
-        videos = _fetch_streaming(platform, streamer, per_streamer)
+        videos = _sort_items(_fetch_streaming(platform, streamer, per_streamer), sort)
         for v in videos:
             url = v.get("url")
             if not url or url in seen_urls:
@@ -222,6 +240,83 @@ def _ingest_streaming(conn, platform: str, streamers: list, per_streamer: int,
             fresh_out.append({"post": post, "risk": sc.risk})
             samples.append({"url": post.url, "platform": platform,
                             "risk": sc.risk, "category": sc.category})
+    return {"added": added, "flagged": flagged}
+
+
+def _live_accounts(platform: str) -> list:
+    """Сид-аккаунты/стримеры площадки для проверки ПРЯМОГО ЭФИРА (берём те же
+    module-level списки, что и для VOD/постов — они монкипатчатся в тестах)."""
+    if platform == "tiktok":
+        return _TIKTOK_SEED_ACCOUNTS
+    if platform == "instagram":
+        return _INSTAGRAM_SEED_ACCOUNTS
+    if platform == "kick":
+        return _KICK_SEED_STREAMERS
+    return _TWITCH_SEED_STREAMERS  # twitch
+
+
+def _fetch_live(platform: str, account: str):
+    """РОБАСТНЫЙ вызов проверки эфира через module-attribute (тесты monkeypatch'ят
+    streaming_mod.fetch_live). Возвращает dict с live=True или None/[]/исключение
+    -> None (сборщик ещё может отсутствовать, пока его делает streaming-агент)."""
+    fn = getattr(streaming_mod, "fetch_live", None)
+    if fn is None:
+        return None
+    try:
+        return fn(platform, account)
+    except Exception:
+        return None
+
+
+def _ingest_live(conn, platform: str, accounts: list, seen_urls: set,
+                 by_category: dict, samples: list, fresh_out: list,
+                 report=None) -> dict:
+    """Автопоиск ПРЯМЫХ ЭФИРОВ: для каждого сид-аккаунта зовём
+    streaming_mod.fetch_live(platform, account); ингестим ТОЛЬКО тех, кто СЕЙЧАС в
+    эфире (live=True). Пост помечается флагом live (в samples и fresh_out — модель
+    Post его не несёт). Скорим по «<аккаунт> <заголовок эфира>». Дедуп по
+    seen_urls + _pid + db.get_post. Любой сбой по аккаунту проглатывается.
+    -> {"added","flagged"}.
+    """
+    added = flagged = 0
+    n = max(1, len(accounts))
+    for i, account in enumerate(accounts):
+        if report:
+            report(f"{platform} эфир: {account}", 5 + int(70 * i / n))
+        info = _fetch_live(platform, account)
+        # ингестим только тех, кто СЕЙЧАС в эфире (live=True) и у кого есть url.
+        if not isinstance(info, dict) or not info.get("live"):
+            continue
+        url = info.get("url")
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        pid = _pid(platform, url)
+        if db.get_post(conn, pid) is not None:
+            continue
+        author = (info.get("author_handle") or account).lstrip("@")
+        title = info.get("title") or info.get("description") or ""
+        cap = normalize(title)
+        score_text = normalize(f"{author} {title}".strip())
+        post = Post(
+            id=pid, platform=platform, author_handle=author,
+            url=url, caption=cap,
+            posted_at=datetime.now(timezone.utc).isoformat(),
+            media_path=None, thumb_url=info.get("thumb_url") or None,
+            source="discovered", view_count=info.get("view_count") or 0,
+        )
+        try:
+            sc = _ingest(conn, post, cap, score_text=score_text)
+        except Exception:
+            continue
+        added += 1
+        if sc.category in by_category:
+            by_category[sc.category] += 1
+        if sc.risk >= config.ESCALATE_THRESHOLD:
+            flagged += 1
+        fresh_out.append({"post": post, "risk": sc.risk, "live": True})
+        samples.append({"url": post.url, "platform": platform, "risk": sc.risk,
+                        "category": sc.category, "live": True})
     return {"added": added, "flagged": flagged}
 
 
@@ -276,22 +371,37 @@ def _deep_analyze(conn, fresh: list, deep_top: int, report=None) -> dict:
 
 def discover(conn, queries=None, per_query: int = 4, report=None,
              search_yt=None, with_telegram: bool = True, scan_tg=None,
-             platform: str = "all", deep: bool = False, deep_top: int = 3) -> dict:
-    """Автономный поиск. search_yt/scan_tg инъектируются в тестах (без сети).
+             platform: str = "all", deep: bool = False, deep_top: int = 3,
+             country: str = "all", categories=None,
+             content_type: str = "all", sort: str = "relevance") -> dict:
+    """Автономный НАСТРАИВАЕМЫЙ поиск. search_yt/scan_tg инъектируются в тестах (без сети).
 
     platform: "all" (youtube+telegram), "youtube" (только ytsearch),
       "telegram" (только поиск+скан каналов), "tiktok"/"instagram"
-      (best-effort site:<host> поиск видео-ссылок -> fetch_post -> ingest+score),
+      (yt-dlp по курируемым аккаунтам -> ingest+score),
       "twitch"/"kick" (VOD-ы курируемых гемблинг-стримеров казино/слотов через
       app.discovery.streaming -> ingest+score).
+    country/categories: задают НАБОР запросов через catalog.build_queries(country,
+      categories) — локализованные запросы по стране (kz/ru/all) и категориям
+      (all/casino/pyramid/fraud/crypto). Применяется ТОЛЬКО когда явный `queries`
+      не передан; иначе используется переданный список (фоллбэк — DISCOVERY_QUERIES).
+    content_type: "all"/"video" — VOD/посты (как раньше); "live" — для
+      tiktok/twitch/kick/instagram проверяем ПРЯМОЙ ЭФИР через
+      streaming_mod.fetch_live и ингестим только тех, кто СЕЙЧАС в эфире (флаг live).
+    sort: "relevance" (как есть), "recent" (свежее раньше), "popular"
+      (по view_count) — порядок элементов перед ингестом.
     deep: при True после YouTube-ингестии берёт top-`deep_top` свежих постов по
       риску, реально качает видео и прогоняет мультимодальный разбор
       (Whisper+EasyOCR+CLIP) с пере-скорингом — ловит промо, спрятанное в
       аудио/видео при невинном заголовке.
     """
     search_yt = search_yt or search_youtube
-    queries = queries or DISCOVERY_QUERIES
+    # Источник запросов: явный queries > реестр (страна+категории) > фоллбэк-список.
+    if queries is None:
+        queries = catalog.build_queries(country, categories) or DISCOVERY_QUERIES
     platform = (platform or "all").lower().strip()
+    content_type = (content_type or "all").lower().strip()
+    sort = (sort or "relevance").lower().strip()
     added = flagged = tg_added = platform_added = 0
     samples: list = []
     fresh_yt: list = []  # свежедобавленные YouTube-посты для глубокого разбора
@@ -299,10 +409,16 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
     by_category: dict = {c: 0 for c in config.CATEGORIES if c != "clean"}
     n = len(queries)
 
-    do_youtube = platform in ("all", "youtube")
-    do_telegram = with_telegram and platform in ("all", "telegram")
-    do_video_platform = platform in _VIDEO_PLATFORMS
-    do_streaming = platform in _STREAMING_PLATFORMS
+    # content_type="live" -> для tiktok/twitch/kick/instagram ищем ПРЯМЫЕ ЭФИРЫ
+    # (а не VOD/посты). Для youtube/telegram «эфирного» сид-режима нет — там работаем
+    # как обычно (VOD/посты), но при платформенном live VOD-ветку отключаем.
+    want_live = content_type == "live"
+    do_live = want_live and platform in _LIVE_PLATFORMS
+
+    do_youtube = platform in ("all", "youtube") and not want_live
+    do_telegram = (with_telegram and platform in ("all", "telegram") and not want_live)
+    do_video_platform = platform in _VIDEO_PLATFORMS and not do_live
+    do_streaming = platform in _STREAMING_PLATFORMS and not do_live
 
     # 1) YouTube — реальные ролики с реальными ссылками.
     if do_youtube:
@@ -310,7 +426,7 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
             if report:
                 report(f"YouTube: {q[:38]}", 5 + int(70 * i / max(n, 1)))
             try:
-                items = search_yt(q, per_query)
+                items = _sort_items(search_yt(q, per_query), sort)
             except Exception:
                 items = []
             for it in items:
@@ -349,7 +465,7 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
         per_account = max(10, min(20, per_query * 4))
         res = _ingest_video_platform(
             conn, platform, accounts, per_account,
-            seen_urls, by_category, samples, fresh_platform, report=report,
+            seen_urls, by_category, samples, fresh_platform, report=report, sort=sort,
         )
         platform_added += res["added"]
         flagged += res["flagged"]
@@ -366,10 +482,25 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
         per_streamer = max(10, min(20, per_query * 4))
         sres = _ingest_streaming(
             conn, platform, streamers, per_streamer,
-            seen_urls, by_category, samples, fresh_streaming, report=report,
+            seen_urls, by_category, samples, fresh_streaming, report=report, sort=sort,
         )
         platform_added += sres["added"]
         flagged += sres["flagged"]
+
+    # 1d) ПРЯМЫЕ ЭФИРЫ (content_type="live") — tiktok/twitch/kick/instagram:
+    #     проверяем эфир сид-аккаунтов через streaming_mod.fetch_live, ингестим
+    #     только тех, кто СЕЙЧАС в эфире (пост помечен флагом live).
+    fresh_live: list = []
+    live_added = 0
+    if do_live:
+        accounts = _live_accounts(platform)
+        lres = _ingest_live(
+            conn, platform, accounts,
+            seen_urls, by_category, samples, fresh_live, report=report,
+        )
+        live_added = lres["added"]
+        platform_added += lres["added"]
+        flagged += lres["flagged"]
 
     # 2) Telegram — курируемые казино-каналы (надёжно) + DDG best-effort + СНЕЖНЫЙ КОМ
     #    по t.me-ссылкам в сообщениях: находит НОВЫЕ каналы И ЧАТЫ (не только каналы).
@@ -408,9 +539,9 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
         except Exception:
             pass
 
-    # 3) ГЛУБОКИЙ мультимодальный разбор top-постов (опц.) — youtube + tiktok + twitch/kick.
+    # 3) ГЛУБОКИЙ мультимодальный разбор top-постов (опц.) — youtube + tiktok + twitch/kick + live.
     deep_analyzed = 0
-    deep_pool = fresh_yt + fresh_platform + fresh_streaming
+    deep_pool = fresh_yt + fresh_platform + fresh_streaming + fresh_live
     if deep and deep_pool:
         try:
             dres = _deep_analyze(conn, deep_pool, deep_top, report=report)
@@ -422,7 +553,12 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
     # Честная нота, если по площадке ничего не нашли (instagram закрыт логин-волом,
     # либо аккаунты временно недоступны) — чтобы UI не показывал немой «0».
     note = ""
-    if do_video_platform and platform_added == 0:
+    if do_live and live_added == 0:
+        # Эфирный режим: никто из сид-аккаунтов сейчас не в эфире (норма) либо
+        # проверка эфира недоступна — честно сообщаем, что это НЕ сбой.
+        note = ("Сейчас никто из отслеживаемых аккаунтов не в прямом эфире. "
+                "Это нормально — попробуйте позже либо переключитесь на VOD/посты.")
+    elif do_video_platform and platform_added == 0:
         if platform == "instagram":
             note = ("Instagram не отдаёт публичный автопоиск без входа. "
                     "Используйте «Живую проверку» ссылки на reel, либо TikTok/YouTube/Telegram.")
@@ -444,6 +580,11 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
         "flagged": flagged, "queries": n, "samples": samples[:10],
         "by_category": by_category,
         "telegram_chats": len(tg_chats), "telegram_chat_links": tg_chats[:10],
+        # эхо настроек автопоиска (для UI/диагностики)
+        "country": (country or "all").lower().strip(),
+        "categories": catalog._norm_categories(categories),
+        "content_type": content_type, "sort": sort,
+        "live_added": live_added,
     }
     if note:
         result["note"] = note

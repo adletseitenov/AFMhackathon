@@ -161,6 +161,51 @@
           </div>
         </div>
 
+        <!-- настраиваемые фильтры автопоиска: страна · категории · тип контента · сортировка -->
+        <div class="mt-3 pt-3 border-t border-line grid grid-cols-12 gap-x-4 gap-y-3">
+          <!-- страна (одиночный выбор) -->
+          <div class="col-span-12 sm:col-span-6 lg:col-span-3">
+            <label class="filter-k">страна</label>
+            <select x-model="discoverCountry" :disabled="discovering"
+                    class="filter-select" aria-label="Страна поиска">
+              <template x-for="c in catalogCountries" :key="c.id">
+                <option :value="c.id" x-text="c.label"></option>
+              </template>
+            </select>
+          </div>
+          <!-- тип контента -->
+          <div class="col-span-12 sm:col-span-6 lg:col-span-3">
+            <label class="filter-k">тип контента</label>
+            <select x-model="discoverContentType" :disabled="discovering"
+                    class="filter-select" aria-label="Тип контента">
+              <template x-for="ct in catalogContentTypes" :key="ct.id">
+                <option :value="ct.id" x-text="ct.label"></option>
+              </template>
+            </select>
+          </div>
+          <!-- сортировка -->
+          <div class="col-span-12 sm:col-span-6 lg:col-span-3">
+            <label class="filter-k">сортировка</label>
+            <select x-model="discoverSort" :disabled="discovering"
+                    class="filter-select" aria-label="Сортировка результатов">
+              <template x-for="so in catalogSorts" :key="so.id">
+                <option :value="so.id" x-text="so.label"></option>
+              </template>
+            </select>
+          </div>
+          <!-- категории (мульти-выбор чекбоксами) -->
+          <div class="col-span-12 lg:col-span-3">
+            <label class="filter-k">категории <span class="text-muted normal-case font-normal" x-show="!discoverCategories.length">— все</span></label>
+            <div class="filter-chips" role="group" aria-label="Категории контента">
+              <template x-for="cat in catalogCategories" :key="cat.id">
+                <button type="button" @click="toggleDiscoverCategory(cat.id)" :disabled="discovering"
+                        class="chip-toggle" :class="isDiscoverCategory(cat.id) ? 'is-on' : ''"
+                        :aria-pressed="isDiscoverCategory(cat.id)" x-text="cat.label"></button>
+              </template>
+            </div>
+          </div>
+        </div>
+
         <!-- live progress -->
         <template x-if="discovering">
           <div class="mt-3 space-y-2">
@@ -490,6 +535,10 @@
               <div class="mt-2.5 flex flex-wrap items-center gap-1.5">
                 <span class="badge-chip" :style="riskBadge(row.score.risk)" x-text="actionLabel(row.recommended_action)"></span>
                 <span class="badge-chip bg-canvas text-muted border border-line" x-text="categoryLabel(row.score.category)"></span>
+                <!-- прямой эфир: пост идёт в реальном времени -->
+                <span class="live-badge" x-show="isLive(row.post)" title="Материал идёт прямым эфиром">
+                  <span class="live-badge-dot"></span><span>прямой эфир</span>
+                </span>
                 <!-- лицензированный в РК оператор: блокировка не обязательна (риск-скор не занижается) -->
                 <span class="lic-badge"
                       x-show="row.post.licensed || (row.post.licensed_operators && row.post.licensed_operators.length)"
@@ -561,6 +610,10 @@
                       <i :class="'ph ' + sourceIcon(detail.post.source) + ' text-[12px]'"></i>
                       <span x-text="sourceLabel(detail.post.source)"></span>
                     </span>
+                    <!-- прямой эфир -->
+                    <span class="live-badge" x-show="isLive(detail.post)" title="Материал идёт прямым эфиром">
+                      <span class="live-badge-dot"></span><span>прямой эфир</span>
+                    </span>
                   </div>
                   <h2 class="text-[18px] font-semibold tracking-tight mt-1 leading-snug" x-text="detail.post.caption || 'Без подписи'"></h2>
                   <a x-show="hasRealUrl(detail.post)" :href="detail.post.url" target="_blank" rel="noopener"
@@ -602,6 +655,32 @@
                    class="lift ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-soft bg-ink text-white text-[12px] hover:opacity-90">
                   <i class="ph ph-file-pdf text-[15px]"></i> Экспорт дела (PDF)
                 </a>
+              </div>
+
+              <!-- ═══ Рекомендации по кейсу — точечные действия под конкретный пост ═══
+                   detail.case_recommendations: [{title, rationale, action, priority}].
+                   Пустой/отсутствует -> блок не показываем. -->
+              <div x-show="caseRecs.length" x-cloak>
+                <div class="flex items-center gap-2 mb-2.5">
+                  <i class="ph ph-lightbulb text-[15px] text-ink"></i>
+                  <h3 class="section-h !mb-0">Рекомендации по кейсу</h3>
+                  <span class="text-[11px] text-muted normal-case font-normal tracking-normal">точечные действия по этому материалу</span>
+                </div>
+                <ul class="space-y-2">
+                  <template x-for="(rec, i) in caseRecs" :key="i">
+                    <li class="rounded-card border border-line bg-canvas px-4 py-3">
+                      <div class="flex items-start justify-between gap-3">
+                        <span class="text-[13px] font-semibold tracking-tight leading-snug" x-text="rec.title"></span>
+                        <span class="badge-chip border shrink-0" :style="priorityBadge(rec.priority)" x-text="priorityLabel(rec.priority)"></span>
+                      </div>
+                      <p class="text-[12px] text-muted leading-snug mt-1.5" x-show="rec.rationale" x-text="rec.rationale"></p>
+                      <div class="rounded-soft border border-line bg-surface px-3 py-2 mt-2 flex items-start gap-2" x-show="rec.action">
+                        <i class="ph ph-arrow-bend-down-right text-[14px] text-ink mt-px shrink-0"></i>
+                        <span class="text-[12px] text-ink font-medium" x-text="rec.action"></span>
+                      </div>
+                    </li>
+                  </template>
+                </ul>
               </div>
 
               <!-- ═══ Вердикт аналитика — метка для дообучения модели ═══ -->

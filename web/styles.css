@@ -337,7 +337,81 @@ textarea:focus-visible,
   margin-bottom: 8px;
 }
 
+/* ---- configurable discovery filters (страна/категории/тип/сортировка) ---- */
+.filter-k {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #9A9A97;
+  margin-bottom: 5px;
+}
+.filter-select {
+  width: 100%;
+  background: #FFFFFF;
+  border: 1px solid #EAEAEA;
+  border-radius: 8px;
+  padding: 7px 9px;
+  font-size: 12px;
+  color: #111111;
+  outline: none;
+  transition: border-color 160ms ease;
+}
+.filter-select:focus { border-color: #787774; }
+.filter-select:disabled { opacity: 0.5; }
+
+/* категории — мульти-выбор компактными чипами-тогглами */
+.filter-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip-toggle {
+  font-size: 11px;
+  line-height: 1;
+  padding: 6px 10px;
+  border-radius: 9999px;
+  color: #787774;
+  background: #FBFBFA;
+  border: 1px solid #EAEAEA;
+  white-space: nowrap;
+  transition: color 160ms ease, background-color 160ms ease, border-color 160ms ease;
+}
+.chip-toggle:hover { color: #111111; border-color: #C9C9C7; }
+.chip-toggle.is-on {
+  color: #111111;
+  background: #FFFFFF;
+  border-color: #111111;
+  font-weight: 500;
+}
+.chip-toggle:disabled { opacity: 0.5; cursor: default; }
+
+/* ---- «прямой эфир» badge — нейтральный фон, красный ТОЛЬКО как акцент-точка ----
+   Локированная палитра: бейдж на bone/line, точка эфира #9F2F2D (escalate-tx). */
+.live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #9F2F2D;
+  background: #FDEBEC;
+  border: 1px solid #F3D5D5;
+  border-radius: 9999px;
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+.live-badge-dot {
+  width: 6px; height: 6px; border-radius: 9999px; background: #9F2F2D;
+  box-shadow: 0 0 0 0 rgba(159,47,45,0.45);
+  animation: koz-live-ping 1.8s cubic-bezier(.16,1,.3,1) infinite;
+}
+@keyframes koz-live-ping {
+  0% { box-shadow: 0 0 0 0 rgba(159,47,45,0.4); }
+  70%, 100% { box-shadow: 0 0 0 5px rgba(159,47,45,0); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .q-card, .watch-row, .lift, .risk-meter > span { transition: none; }
-  .live-dot { animation: none; }
+  .live-dot, .live-badge-dot { animation: none; }
 }
