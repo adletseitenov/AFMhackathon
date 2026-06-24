@@ -48,7 +48,15 @@ Thumbs.db
 # runtime watchlist state
 data/watchlist.json
 data/watchlist_stats.json
+data/watchlist_entry_stats.json
 
-# runtime server log
+# runtime server logs
 data/server.log
+data/server.out.log
+data/server.err.log
+data/srv.out.log
+data/srv.err.log
 data/analyst_labels.jsonl
+
+# Playwright MCP run artifacts
+.playwright-mcp/

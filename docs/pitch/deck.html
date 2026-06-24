@@ -7,153 +7,638 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6.5' fill='none' stroke='%23111111' stroke-width='1.2'/%3E%3Ccircle cx='8' cy='8' r='2.3' fill='%23111111'/%3E%3C/svg%3E" />
 <style>
   :root{
-    --bg:#FBFBFA; --surface:#FFFFFF; --ink:#111111; --muted:#787774; --line:#EAEAEA;
+    --bg:#FBFBFA; --surface:#FFFFFF; --ink:#111111; --muted:#787774; --line:#EAEAEA; --line2:#EDEDEC;
     --redbg:#FDEBEC; --redink:#9F2F2D; --ylbg:#FBF3DB; --ylink:#956400; --grbg:#EDF3EC; --grink:#346538;
+    --shadow:0 1px 2px rgba(17,17,17,.04),0 8px 30px rgba(17,17,17,.06);
+    --shadow-lg:0 2px 6px rgba(17,17,17,.05),0 20px 60px rgba(17,17,17,.10);
+    --r:14px;
   }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%}
   body{
     background:var(--bg); color:var(--ink);
     font-family:'Geist','SF Pro Display','Segoe UI','Helvetica Neue',Arial,sans-serif;
-    -webkit-font-smoothing:antialiased; line-height:1.55;
+    -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; line-height:1.5;
+    overflow:hidden;
   }
-  .mono{font-family:'Geist Mono','SF Mono','JetBrains Mono',ui-monospace,monospace}
-  #deck{height:100vh;display:flex;align-items:center;justify-content:center}
-  .slide{display:none;width:min(960px,92vw);max-height:92vh;overflow:auto;padding:8px 4px}
-  .slide.active{display:block;animation:fade .35s cubic-bezier(.16,1,.3,1)}
-  @keyframes fade{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
-  .eyebrow{font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
-  h1{font-size:clamp(34px,6vw,64px);line-height:1.04;letter-spacing:-.02em;margin:.15em 0 .1em}
-  h2{font-size:clamp(24px,3.6vw,38px);line-height:1.1;letter-spacing:-.015em;margin:.1em 0 .5em}
-  p{color:#1f2937;margin:.4em 0}
-  .lead{font-size:clamp(17px,2vw,20px);color:#374151}
-  ul{margin:.4em 0;padding-left:0;list-style:none}
-  li{padding:10px 0;border-bottom:1px solid var(--line)}
-  li:last-child{border-bottom:0}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:8px}
-  .card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
-  .card h3{margin:.1em 0 .35em;font-size:18px}
-  .card .n{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
-  .chip{display:inline-block;font-size:11px;letter-spacing:.05em;text-transform:uppercase;
-        padding:3px 9px;border-radius:9999px;margin:0 6px 6px 0}
+  /* мягкая глубина холста */
+  body::before{
+    content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+    background:
+      radial-gradient(1200px 700px at 78% -8%, rgba(159,47,45,.05), transparent 60%),
+      radial-gradient(1000px 700px at 8% 108%, rgba(52,101,56,.05), transparent 60%);
+  }
+  .mono{font-family:'Geist Mono','SF Mono','JetBrains Mono',ui-monospace,monospace;font-variant-ligatures:none}
+
+  /* ---------- каркас слайдов ---------- */
+  #deck{position:relative;z-index:1;height:100vh;display:flex;align-items:center;justify-content:center;padding:0 26px}
+  .slide{display:none;width:min(1060px,94vw);max-height:90vh;overflow:auto;scrollbar-width:none}
+  .slide::-webkit-scrollbar{display:none}
+  .slide.active{display:block}
+  .slide.active > *{opacity:0;transform:translateY(14px);animation:rise .5s cubic-bezier(.16,1,.3,1) forwards}
+  .slide.active > *:nth-child(1){animation-delay:.04s}
+  .slide.active > *:nth-child(2){animation-delay:.10s}
+  .slide.active > *:nth-child(3){animation-delay:.17s}
+  .slide.active > *:nth-child(4){animation-delay:.24s}
+  .slide.active > *:nth-child(5){animation-delay:.31s}
+  .slide.active > *:nth-child(6){animation-delay:.38s}
+  @keyframes rise{to{opacity:1;transform:none}}
+
+  /* ---------- типографика ---------- */
+  .kicker{display:flex;align-items:center;gap:10px;font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+  .kicker .dot{width:6px;height:6px;border-radius:50%;background:var(--ink);opacity:.55}
+  .kicker b{color:var(--ink);font-weight:600;letter-spacing:.14em}
+  h1{font-size:clamp(46px,9vw,104px);line-height:.92;letter-spacing:-.045em;margin:.06em 0 .12em;font-weight:680}
+  h2{font-size:clamp(26px,4.4vw,46px);line-height:1.04;letter-spacing:-.022em;margin:.06em 0 .5em;font-weight:640}
+  h3{margin:.1em 0 .3em;font-size:18px;letter-spacing:-.01em}
+  p{color:#262626;margin:.45em 0}
+  .lead{font-size:clamp(17px,2.1vw,22px);color:#3a3a3a;line-height:1.45;max-width:46ch}
+  .muted{color:var(--muted)}
+  .accentbar{height:3px;width:58px;background:var(--ink);border-radius:2px;margin:16px 0}
+  .em{color:var(--ink);font-weight:620}
+
+  /* ---------- карточки/сетки ---------- */
+  .grid{display:grid;gap:14px;margin-top:6px}
+  .g2{grid-template-columns:1fr 1fr}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .g4{grid-template-columns:repeat(4,1fr)}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:18px 20px;box-shadow:var(--shadow)}
+  .card .n{font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
+  .card p{font-size:14.5px;color:#444;margin:.2em 0 0}
+  .soft{box-shadow:none;background:#fff}
+
+  ul.clean{margin:.3em 0;padding-left:0;list-style:none}
+  ul.clean li{padding:11px 0;border-bottom:1px solid var(--line);display:flex;gap:12px;align-items:flex-start}
+  ul.clean li:last-child{border-bottom:0}
+  ul.clean li .mk{flex:0 0 auto;width:22px;height:22px;border-radius:7px;display:grid;place-items:center;font-size:12px;font-weight:700;background:#F3F3F1;color:var(--ink);margin-top:1px}
+
+  .chip{display:inline-flex;align-items:center;gap:6px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;
+        padding:4px 10px;border-radius:9999px;margin:0 6px 6px 0;font-weight:600;border:1px solid transparent}
   .red{background:var(--redbg);color:var(--redink)} .yl{background:var(--ylbg);color:var(--ylink)}
   .gr{background:var(--grbg);color:var(--grink)}
-  .big{font-size:clamp(40px,8vw,84px);letter-spacing:-.03em;line-height:1}
-  .kv{display:flex;gap:14px;align-items:baseline;padding:8px 0;border-bottom:1px solid var(--line)}
-  .kv b{min-width:38px} .kv:last-child{border-bottom:0}
-  .footer{position:fixed;left:0;right:0;bottom:0;display:flex;justify-content:space-between;
-          align-items:center;padding:14px 22px;color:var(--muted);font-size:13px;border-top:1px solid var(--line);
-          background:rgba(251,251,250,.85);backdrop-filter:blur(6px)}
-  .footer a{color:var(--muted);text-decoration:none;border:1px solid var(--line);border-radius:6px;padding:4px 10px;cursor:pointer}
-  .eye{display:inline-block;width:22px;height:22px;vertical-align:-4px;margin-right:8px}
-  .muted{color:var(--muted)}
-  .accentbar{height:3px;width:54px;background:var(--ink);border-radius:2px;margin:14px 0}
+  .ghost{background:#fff;border:1px solid var(--line);color:var(--muted);font-weight:600}
+  .soon{background:#fff;border:1px dashed #D8D8D6;color:var(--muted)}
+
+  .stat{font-size:clamp(38px,7vw,78px);letter-spacing:-.04em;line-height:.95;font-weight:700}
+  .statlbl{color:var(--muted);font-size:14px}
+
+  /* ---------- глаз / радар (титул) ---------- */
+  .hero{display:grid;grid-template-columns:1.15fr .85fr;gap:26px;align-items:center}
+  .eye-stage{position:relative;aspect-ratio:1;width:min(360px,38vw);margin-left:auto;display:grid;place-items:center}
+  .eye-stage .ring{position:absolute;border-radius:50%;border:1px solid var(--ink);opacity:.16}
+  .eye-stage .r1{inset:0;animation:breathe 6s ease-in-out infinite}
+  .eye-stage .r2{inset:14%;opacity:.22;animation:breathe 6s ease-in-out infinite .5s}
+  .eye-stage .r3{inset:30%;opacity:.30;animation:breathe 6s ease-in-out infinite 1s}
+  .eye-stage .sweep{position:absolute;inset:0;border-radius:50%;
+    background:conic-gradient(from 0deg, rgba(17,17,17,0) 0deg, rgba(17,17,17,.14) 38deg, rgba(159,47,45,.16) 52deg, rgba(17,17,17,0) 70deg);
+    -webkit-mask:radial-gradient(circle, transparent 28%, #000 30%);mask:radial-gradient(circle, transparent 28%, #000 30%);
+    animation:spin 4.6s linear infinite}
+  .eye-stage .iris{position:relative;width:24%;height:24%;border-radius:50%;background:var(--ink);
+    box-shadow:0 0 0 6px #fff,0 0 0 7px var(--line);animation:pulse 6s ease-in-out infinite}
+  .eye-stage .iris::after{content:"";position:absolute;inset:30% 30% auto auto;width:18%;height:18%;border-radius:50%;background:#fff;opacity:.85}
+  .eye-stage .tick{position:absolute;width:2px;height:7px;background:var(--ink);opacity:.18;left:calc(50% - 1px);top:2px;transform-origin:50% calc(50vw)}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.025)}}
+  @keyframes pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(.84);opacity:.86}}
+
+  .wordmark{display:flex;align-items:baseline;gap:14px}
+  .loopline{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:4px;font-weight:620;font-size:clamp(15px,1.8vw,19px)}
+  .loopline .s{padding:6px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;box-shadow:var(--shadow)}
+  .loopline .ar{color:var(--muted)}
+
+  /* ---------- пайплайн ---------- */
+  .pipe{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:10px}
+  .pipe .st{position:relative;background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px;box-shadow:var(--shadow)}
+  .pipe .st .ix{font-size:11px;color:var(--muted);letter-spacing:.12em}
+  .pipe .st h3{font-size:15px;margin:.3em 0 .15em}
+  .pipe .st p{font-size:12.5px;color:#555;margin:0}
+  .pipe .st:not(:last-child)::after{content:"→";position:absolute;right:-9px;top:50%;transform:translateY(-50%);color:#C9C9C7;font-weight:700;z-index:2}
+
+  /* ---------- архитектура модели ---------- */
+  .arch{display:grid;grid-template-columns:1.4fr auto .9fr auto .7fr;gap:12px;align-items:center;margin-top:8px}
+  .col{display:grid;gap:8px}
+  .blk{background:#fff;border:1px solid var(--line);border-radius:11px;padding:11px 13px;box-shadow:var(--shadow);font-size:13px}
+  .blk .t{font-size:11px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:2px}
+  .merge,.arrow{display:grid;place-items:center;color:#B9B9B7;font-weight:700;font-size:20px}
+  .head{background:var(--ink);color:#fff;border-radius:11px;padding:14px;text-align:center;box-shadow:var(--shadow-lg)}
+  .head .t{font-size:11px;letter-spacing:.12em;text-transform:uppercase;opacity:.7}
+  .head b{font-size:15px}
+  .gauge{display:grid;place-items:center;gap:6px}
+  .gauge .ring{width:108px;height:108px;border-radius:50%;display:grid;place-items:center;
+    background:conic-gradient(var(--redink) calc(var(--p,92)*1%), var(--line) 0);}
+  .gauge .ring .in{width:80px;height:80px;border-radius:50%;background:#fff;display:grid;place-items:center;box-shadow:var(--shadow)}
+  .gauge .ring .in b{font-size:24px;letter-spacing:-.02em}
+
+  /* мини-бары метрик */
+  .bars{display:grid;gap:9px;margin-top:6px}
+  .bar{display:grid;grid-template-columns:96px 1fr 46px;align-items:center;gap:10px;font-size:13px}
+  .bar .track{display:block;height:9px;border-radius:6px;background:var(--line2);overflow:hidden}
+  .bar .fill{display:block;height:100%;border-radius:6px;background:var(--ink);width:0;transition:width 1.1s cubic-bezier(.16,1,.3,1)}
+  .slide.active .bar .fill{width:var(--w)}
+
+  /* ---------- очередь рисков ---------- */
+  .queue{display:grid;gap:10px;margin-top:6px}
+  .row{display:grid;grid-template-columns:64px 1fr auto;align-items:center;gap:14px;background:#fff;border:1px solid var(--line);border-left-width:4px;border-radius:12px;padding:12px 16px;box-shadow:var(--shadow)}
+  .row.red{border-left-color:var(--redink)} .row.yl{border-left-color:var(--ylink)} .row.gr{border-left-color:var(--grink)}
+  .row .score{font-size:26px;font-weight:740;letter-spacing:-.03em}
+  .row.red .score{color:var(--redink)} .row.yl .score{color:var(--ylink)} .row.gr .score{color:var(--grink)}
+  .row .meta{font-size:12.5px;color:var(--muted);margin-top:2px}
+  .row .ev{font-size:14px;color:#222}
+
+  /* ---------- граф ---------- */
+  .net{width:100%;height:auto;display:block}
+  .net .lnk{stroke:#CFCFCD;stroke-width:1.4}
+  .net .post{fill:#fff;stroke:var(--redink);stroke-width:1.6}
+  .net .auth{fill:#fff;stroke:#C9C9C7;stroke-width:1.4}
+  .net .ent{fill:var(--redbg);stroke:var(--redink);stroke-width:1.8}
+  .net text{font-family:'Geist Mono',ui-monospace,monospace;font-size:10px;fill:var(--ink)}
+  .net .pulse{transform-origin:center;animation:gpulse 2.6s ease-in-out infinite}
+  @keyframes gpulse{0%,100%{r:26}50%{r:29}}
+
+  /* ---------- скоркарта критериев ---------- */
+  .kv{display:grid;grid-template-columns:46px 1fr auto;gap:14px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)}
+  .kv:last-child{border-bottom:0}
+  .kv .num{font-weight:740;font-size:18px}
+  .kv .done{font-size:11px;color:var(--grink);background:var(--grbg);border-radius:9999px;padding:4px 10px;font-weight:600;white-space:nowrap}
+
+  /* ---------- футер / прогресс ---------- */
+  .topbar{position:fixed;left:0;top:0;height:3px;z-index:5;background:var(--ink);width:0;transition:width .45s cubic-bezier(.16,1,.3,1)}
+  .footer{position:fixed;left:0;right:0;bottom:0;z-index:5;display:flex;justify-content:space-between;align-items:center;
+          padding:12px 22px;color:var(--muted);font-size:13px;border-top:1px solid var(--line);
+          background:rgba(251,251,250,.82);backdrop-filter:blur(8px)}
+  .footer .brand{display:flex;align-items:center;gap:9px;font-weight:600;color:var(--ink)}
+  .footer .brand .eye{width:18px;height:18px}
+  .footer .center{display:flex;gap:8px;align-items:center}
+  .dots{display:flex;gap:7px}
+  .dots i{width:7px;height:7px;border-radius:50%;background:#D6D6D4;cursor:pointer;transition:.2s}
+  .dots i.on{background:var(--ink);transform:scale(1.15)}
+  .nav{display:flex;gap:8px;align-items:center}
+  .nav a,.nav button{font:inherit;color:var(--muted);text-decoration:none;border:1px solid var(--line);background:#fff;border-radius:8px;padding:5px 11px;cursor:pointer;transition:.15s}
+  .nav a:hover,.nav button:hover{color:var(--ink);border-color:#D2D2D0}
+  .timing{font-size:12px;color:var(--muted)}
+
+  @media (max-width:760px){
+    .hero,.arch{grid-template-columns:1fr} .eye-stage{margin:0 auto 10px}
+    .pipe{grid-template-columns:1fr 1fr} .pipe .st::after{display:none}
+    .g4,.g3{grid-template-columns:1fr 1fr} .arch{gap:8px}
+  }
+
+  /* ---------- заметки спикера (суфлёр) ---------- */
+  #notes{position:fixed;left:0;right:0;bottom:0;z-index:8;display:none;background:#fff;
+         border-top:2px solid var(--ink);box-shadow:0 -12px 44px rgba(17,17,17,.13);
+         padding:13px 24px 18px;max-height:46vh;overflow:auto}
+  #notes.on{display:block}
+  #notes .nhead{display:flex;gap:16px;align-items:center;justify-content:space-between;
+                color:var(--muted);font-size:13px;margin-bottom:8px;flex-wrap:wrap}
+  #notes .nhead b{color:var(--ink)} #notes .nhint{color:#AAA9A6}
+  #notes .nbody{font-size:clamp(16px,1.9vw,21px);line-height:1.5;color:#1b1b1b;max-width:78ch}
+  body.notes-open .footer{display:none}
+
+  /* ---------- печать в PDF ---------- */
+  @media print{
+    @page{size:1280px 720px;margin:0}
+    body{overflow:visible} body::before{display:none}
+    .topbar,.footer,#notes{display:none!important}
+    #deck{display:block;height:auto;padding:0}
+    .slide{display:block!important;width:1280px;height:720px;max-height:none;overflow:hidden;
+      padding:64px 84px;page-break-after:always;break-after:page;border-bottom:1px solid #eee}
+    .slide > *{opacity:1!important;transform:none!important;animation:none!important}
+    .card,.row,.blk,.pipe .st,.head{box-shadow:none}
+    .eye-stage .sweep,.eye-stage .ring,.eye-stage .iris{animation:none}
+    *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  }
+  /* КРИТИЧНО: при выключенных системных анимациях (Windows «эффекты анимации» off)
+     контент НЕ должен оставаться невидимым (opacity:0) — иначе слайд = белый экран. */
+  @media (prefers-reduced-motion:reduce){
+    *{animation:none!important;transition:none!important}
+    .slide.active > *{opacity:1!important;transform:none!important}
+    .bar .fill{width:var(--w)!important}
+  }
 </style>
 </head>
 <body>
+<div class="topbar" id="topbar"></div>
 <div id="deck">
 
-  <section class="slide active">
-    <div class="eyebrow">АФМ AI Hackathon 2026 · трек AI Media Watch</div>
-    <h1>
-      <svg class="eye" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="none" stroke="#111" stroke-width="1.2"/><circle cx="8" cy="8" r="2.3" fill="#111"/></svg>КӨЗ
-    </h1>
-    <p class="lead">ИИ-консоль аналитика АФМ для выявления незаконного игорного бизнеса и финансовых пирамид в соцсетях.</p>
-    <div class="accentbar"></div>
-    <p class="muted">«КӨЗ» (каз. <i>глаз</i>) — собирает посты, оценивает риск <b>своей обученной моделью</b>, объясняет признаки и приоритизирует материалы для проверки.</p>
+  <!-- 1 · ТИТУЛ -->
+  <section class="slide active" data-time="0:00 · крючок">
+    <div class="kicker"><span class="dot"></span>АФМ AI Hackathon 2026 &nbsp;·&nbsp; <b>трек AI Media Watch</b></div>
+    <div class="hero">
+      <div>
+        <div class="wordmark">
+          <h1>КӨЗ</h1>
+        </div>
+        <p class="lead">ИИ-глаз АФМ над соцсетями. Сам находит рекламу нелегальных казино, финпирамид и мошеннических схем — оценивает риск <span class="em">своей обученной моделью</span>, объясняет и приоритизирует для аналитика.</p>
+        <div class="loopline">
+          <span class="s">Найти</span><span class="ar">→</span>
+          <span class="s">Понять</span><span class="ar">→</span>
+          <span class="s">Действовать</span>
+        </div>
+        <p class="muted" style="margin-top:14px">«КӨЗ» — с казахского «глаз». Русский интерфейс · работает офлайн · собственная AI-модель.</p>
+      </div>
+      <div class="eye-stage" aria-hidden="true">
+        <div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div>
+        <div class="sweep"></div>
+        <div class="iris"></div>
+      </div>
+    </div>
   </section>
 
-  <section class="slide">
-    <div class="eyebrow">Проблема</div>
+  <!-- 2 · ПРОБЛЕМА -->
+  <section class="slide" data-time="0:00–0:30 · критерий №1">
+    <div class="kicker"><span class="dot"></span>Проблема &amp; актуальность</div>
     <h2>Соцсети — главный канал вовлечения в нелегальный гемблинг и пирамиды</h2>
-    <ul>
-      <li>Тысячи постов в день: реклама нелицензированных казино (1xBet, Mostbet, Vavada), «доход 30% в месяц», реф-схемы, призывы в Telegram.</li>
-      <li>Вручную это <b>невозможно</b> отсмотреть и приоритизировать — нужен ИИ.</li>
-      <li>Контент мультимодальный: видео, аудио, субтитры, текст с экрана, визуальные маркеры.</li>
-    </ul>
+    <div class="grid g3" style="margin-top:4px">
+      <div class="card"><div class="stat">тысячи</div><div class="statlbl">роликов в день: казино (1xBet, Mostbet, Vavada), «доход 30%/мес», реф-схемы, призывы в Telegram</div></div>
+      <div class="card"><div class="stat">4+</div><div class="statlbl">площадки одновременно: TikTok · Instagram · YouTube · Telegram — поток круглосуточный</div></div>
+      <div class="card"><div class="stat">RU + KZ</div><div class="statlbl">смесь языков и мультимодальность: видео + речь + текст на экране + визуальные маркеры</div></div>
+    </div>
+    <p class="lead" style="margin-top:18px">Вручную это <span class="em">невозможно</span> отсмотреть и приоритизировать. Масштаб и мультимодальность не разбираются руками — <span class="em">именно поэтому нужен AI</span>.</p>
   </section>
 
-  <section class="slide">
-    <div class="eyebrow">Решение</div>
-    <h2>Аналитическая консоль: собрать → оценить → объяснить → приоритизировать</h2>
-    <div class="grid">
-      <div class="card"><div class="n">Автопоиск</div><h3>Сам находит опасное</h3><p class="muted">«Найти опасное» обходит YouTube + Telegram по скам-запросам RU/KZ → реальные посты с точными ссылками; авто-скор и сортировка: <span class="chip red">эскалация ≥70</span><span class="chip yl">на проверку 40–69</span><span class="chip gr">чисто &lt;40</span></p></div>
-      <div class="card"><div class="n">Drill-down</div><h3>Доказательства + объяснение</h3><p class="muted">Речь→текст (Whisper), текст с экрана / «табличка на видео» (OCR), визуальные маркеры (CLIP), сработавшие паттерны, «почему опасно», PDF-досье.</p></div>
-      <div class="card"><div class="n">Граф связей</div><h3>Скрытые сети</h3><p class="muted">Один бренд / Telegram / промокод / кошелёк связывает аккаунты в координированные кластеры.</p></div>
-      <div class="card"><div class="n">Тренды · Живая проверка</div><h3>Масштаб + ad-hoc</h3><p class="muted">Сводка по категориям/платформам и проверка любого поста по ссылке/файлу.</p></div>
+  <!-- 3 · ТЕЗИС / ПОЛНЫЙ ЦИКЛ -->
+  <section class="slide" data-time="тезис">
+    <div class="kicker"><span class="dot"></span>Чем мы отличаемся</div>
+    <h2>Большинство решений останавливаются на детекции. КӨЗ замыкает цикл.</h2>
+    <div class="grid g3" style="margin-top:8px">
+      <div class="card" style="border-top:3px solid var(--ink)">
+        <div class="n">01 · Найти</div><h3>Автономный поиск</h3>
+        <p>Сама обходит соцсети по скам-запросам RU/KZ и приносит <span class="em">реальные</span> посты с точными ссылками — самое новое и вирусное.</p>
+      </div>
+      <div class="card" style="border-top:3px solid var(--ink)">
+        <div class="n">02 · Понять</div><h3>Своя модель + доказательства</h3>
+        <p>Скоринг собственной sklearn-моделью, мультимодальный разбор (речь / экран / визуал) и объяснение «почему опасно».</p>
+      </div>
+      <div class="card" style="border-top:3px solid var(--redink)">
+        <div class="n">03 · Действовать</div><h3>Контр-меры</h3>
+        <p>Что делать: точка-перекрытие сети, проект запроса на блокировку, контр-нарратив против пропаганды. <span class="chip soon" style="margin-top:6px">дорожная карта</span></p>
+      </div>
+    </div>
+    <p class="muted" style="margin-top:14px">От детекции — к <span class="em">действию</span>. Это и есть ценность для АФМ: не «ещё один детектор», а инструмент реагирования.</p>
+  </section>
+
+  <!-- 4 · РЕШЕНИЕ / ПАЙПЛАЙН -->
+  <section class="slide" data-time="0:30–1:15 · критерий №5">
+    <div class="kicker"><span class="dot"></span>Решение · аналитическая консоль</div>
+    <h2>Собрать → разобрать → оценить → объяснить → приоритизировать</h2>
+    <div class="pipe">
+      <div class="st"><div class="ix">01</div><h3>Собрать</h3><p>Автопоиск + мониторинг каналов. Реальные посты, реальные ссылки.</p></div>
+      <div class="st"><div class="ix">02</div><h3>Разобрать</h3><p>Мультимодал: Whisper (речь) · EasyOCR (экран) · CLIP (визуал).</p></div>
+      <div class="st"><div class="ix">03</div><h3>Оценить</h3><p>Своя sklearn-модель → риск 0–100 и категория.</p></div>
+      <div class="st"><div class="ix">04</div><h3>Объяснить</h3><p>Сработавшие сигналы + причины на русском, PDF-досье.</p></div>
+      <div class="st"><div class="ix">05</div><h3>Приоритизировать</h3><p>Очередь по риску: красный → жёлтый → зелёный.</p></div>
+    </div>
+    <p class="muted" style="margin-top:16px">Человек в контуре: система <span class="em">приоритизирует материал для проверки</span>, а не блокирует и не обвиняет автоматически.</p>
+  </section>
+
+  <!-- 5 · АВТОПОИСК -->
+  <section class="slide" data-time="0:30–1:15 · крючок демо">
+    <div class="kicker"><span class="dot"></span>Автопоиск · «Найти опасное в интернете»</div>
+    <h2>Не работает по подсунутому списку — находит опасное сама</h2>
+    <div class="grid g2">
+      <div>
+        <ul class="clean">
+          <li><span class="mk">↻</span><div><b>Скам-запросы RU + KZ</b> (включая казахскую латиницу) → обход YouTube (yt-dlp), публичных Telegram-каналов, лент аккаунтов TikTok.</div></li>
+          <li><span class="mk">↗</span><div><b>Реальные посты</b> с точными кликабельными ссылками и превью — не синтетика.</div></li>
+          <li><span class="mk">⚑</span><div><b>Авто-скор и сортировка по риску</b>; «снежный ком» по t.me-ссылкам находит новые каналы и чаты.</div></li>
+          <li><span class="mk">∞</span><div><b>В фоне и по расписанию</b> для каналов под наблюдением — непрерывный контур.</div></li>
+        </ul>
+      </div>
+      <div class="card soft">
+        <div class="n">Площадки</div>
+        <div style="margin:6px 0 12px">
+          <span class="chip ghost">TikTok</span><span class="chip ghost">Instagram</span>
+          <span class="chip ghost">YouTube</span><span class="chip ghost">Telegram</span>
+        </div>
+        <div class="n">Расширение охвата — дорожная карта</div>
+        <div style="margin-top:6px">
+          <span class="chip soon">Twitch · стримы казино</span><span class="chip soon">Kick</span>
+        </div>
+        <p style="margin-top:12px">Стриминговые площадки — недомониторенная поверхность: слот-стримы, крипто-«разгоны» в прямом эфире. yt-dlp поддерживает Twitch нативно — площадка добавляется тем же паттерном.</p>
+      </div>
     </div>
   </section>
 
-  <section class="slide">
-    <div class="eyebrow">Критерий №2 — своя модель, независимая от сервисов</div>
+  <!-- 6 · СВОЯ МОДЕЛЬ -->
+  <section class="slide" data-time="1:15–2:00 · критерий №2">
+    <div class="kicker"><span class="dot"></span>Критерий №2 · собственная модель, независимая от сервисов</div>
     <h2>Это не обёртка над ChatGPT — это наша обученная модель</h2>
-    <p class="lead mono">TF-IDF (word + char_wb, RU+KZ) + инженерные + KZ-сигналы → LogisticRegression</p>
-    <ul>
-      <li>Только <b>scikit-learn</b>. <b>Без torch, без внешних API</b> в инференсе. Обучается локально за секунды.</li>
-      <li>Казахстанские сигналы: переводы Kaspi/Halyk, суммы в тенге, +7 7XX, бренды 1хбет/мелбет/Финико, казахскоязычная лексика.</li>
-      <li>Объяснимость «из коробки»: риск-вклад каждого сигнала → причины на русском.</li>
-      <li><span class="big mono">0.95</span> <span class="muted">macro-F1 на отложенной выборке (реалистичная confusion matrix, не идеальная) — экран <span class="mono">/api/metrics</span>.</span></li>
-    </ul>
-  </section>
-
-  <section class="slide">
-    <div class="eyebrow">Этика и ИБ (критерий №3) · Масштаб (критерий №4)</div>
-    <h2>Сигнал для аналитика, а не приговор</h2>
-    <div class="grid">
-      <div class="card"><div class="n">Этика / ИБ</div><h3>Human-in-the-loop</h3><p class="muted">Система <b>приоритизирует</b>, не блокирует и не обвиняет автоматически. Только публичные данные, минимизация PII, объяснимость, контроль ложных срабатываний, SSRF-защита live-проверки.</p></div>
-      <div class="card"><div class="n">Масштаб</div><h3>MVP → прод</h3><p class="muted">Stateless-воркеры экстракторов + очередь, батчинг; путь SQLite → Postgres + объектное хранилище. Авто-роутеры: фичи подключаются без правок ядра.</p></div>
+    <div class="arch">
+      <div class="col">
+        <div class="blk"><div class="t">TF-IDF · слова (1,2)</div>лексика казино/пирамид RU+KZ</div>
+        <div class="blk"><div class="t">TF-IDF · символы char_wb (3,5)</div>ловит искажения: «kаzино», «1xб3т»</div>
+        <div class="blk"><div class="t">Инженерные + KZ-сигналы</div>Kaspi/Halyk, тенге, +7 7XX, 1хбет/мелбет/Финико, ұтыс/қазино, импесонация публичных фигур</div>
+      </div>
+      <div class="merge">⟶</div>
+      <div class="head"><div class="t">наша голова</div><b>LogisticRegression</b><div class="t" style="margin-top:6px">scikit-learn · локально · офлайн</div></div>
+      <div class="arrow">⟶</div>
+      <div class="gauge">
+        <div class="ring" style="--p:92"><div class="in"><b class="mono" data-count="92" data-suffix="">0</b></div></div>
+        <div class="statlbl">риск 0–100</div>
+      </div>
+    </div>
+    <div class="grid g2" style="margin-top:16px">
+      <div class="bars">
+        <div class="bar"><span>macro-F1</span><span class="track"><span class="fill" style="--w:92%;background:var(--ink)"></span></span><span class="mono">0.92</span></div>
+        <div class="bar"><span>gambling</span><span class="track"><span class="fill" style="--w:88%;background:var(--redink)"></span></span><span class="mono">0.88</span></div>
+        <div class="bar"><span>pyramid</span><span class="track"><span class="fill" style="--w:95%;background:var(--ylink)"></span></span><span class="mono">0.95</span></div>
+        <div class="bar"><span>fraud</span><span class="track"><span class="fill" style="--w:91%;background:var(--redink)"></span></span><span class="mono">0.91</span></div>
+        <div class="bar"><span>clean</span><span class="track"><span class="fill" style="--w:93%;background:var(--grink)"></span></span><span class="mono">0.93</span></div>
+      </div>
+      <div class="card soft">
+        <p style="margin:0"><b>Без torch. Без внешних API в скоринге.</b> Обучается локально за секунды, артефакт в репозитории — запускается на клоне.</p>
+        <p class="muted" style="margin-top:8px">macro-F1 ≈ 0.92 на отложенной выборке курируемого датасета RU+KZ; <span class="em">честная (недиагональная) confusion matrix</span> — экран <span class="mono">/api/metrics</span>. Боевое развёртывание = вопрос данных, не архитектуры.</p>
+      </div>
     </div>
   </section>
 
-  <section class="slide">
-    <div class="eyebrow">Демо за 3 минуты (критерий №5)</div>
-    <h2>Что показываем вживую</h2>
-    <ul>
-      <li><b>1.</b> «Найти опасное» → система сама находит реальные посты с точными ссылками; очередь сортируется по риску.</li>
-      <li><b>2.</b> Клик по топ-риску → блок «Доказательства» (речь/экран/визуал) + объяснение → «Экспорт дела (PDF)».</li>
-      <li><b>3.</b> Граф: аккаунты пушат один бренд через один Telegram/промокод — координированная сеть.</li>
-      <li><b>4.</b> Мониторинг каналов со статистикой + Живая проверка ссылки → вердикт. Затем метрики модели.</li>
-    </ul>
-    <p class="muted">Консоль работает <b>офлайн</b> (библиотеки завендорены) — не зависит от Wi-Fi на площадке.</p>
+  <!-- 7 · МУЛЬТИМОДАЛ -->
+  <section class="slide" data-time="1:15–2:00 · доказательства">
+    <div class="kicker"><span class="dot"></span>Мультимодальные доказательства · drill-down</div>
+    <h2>Ловим промо, спрятанное в аудио и на экране — даже при невинном заголовке</h2>
+    <div class="grid g3">
+      <div class="card"><div class="n">Речь → текст</div><h3>Whisper</h3><p>Транскрипт аудиодорожки с подсветкой триггер-слов (промокод, бренд, «гарантированный доход»).</p></div>
+      <div class="card"><div class="n">Текст с экрана</div><h3>EasyOCR</h3><p>Та самая «табличка на видео»: промокоды и бонусы, наложенные поверх кадра.</p></div>
+      <div class="card"><div class="n">Визуальные маркеры</div><h3>open-CLIP</h3><p>Сцены казино/ставок — напр. <span class="mono">betting_slip 97%</span>, рулетка, демонстрация денег.</p></div>
+    </div>
+    <div class="card soft" style="margin-top:14px">
+      <p style="margin:0"><b>Важно:</b> Whisper / OCR / CLIP — это локальные <span class="em">фичеризаторы</span> (дают текст/визуал на вход), а <span class="em">не</span> сервис, принимающий решение. Решение — всегда наша sklearn-модель. Блок «Почему опасно» и «Экспорт дела (PDF)» — на русском.</p>
+    </div>
   </section>
 
-  <section class="slide">
-    <div class="eyebrow">Итог</div>
-    <h2>Закрыты все 5 критериев</h2>
-    <div class="kv"><b>№1</b><span>Актуальность + обоснование AI — масштаб соцсетей не разобрать вручную.</span></div>
-    <div class="kv"><b>№2</b><span>Своя модель (sklearn, локально, macro-F1 0.94), без внешних API.</span></div>
-    <div class="kv"><b>№3</b><span>ИБ + этика: human-in-the-loop, публичные данные, объяснимость.</span></div>
-    <div class="kv"><b>№4</b><span>Реализуемость + масштаб: модульный пайплайн, путь в прод.</span></div>
-    <div class="kv"><b>№5</b><span>Живое демо: консоль, граф, тренды, PDF, метрики.</span></div>
-    <div class="accentbar"></div>
-    <p class="lead">КӨЗ — глаз АФМ над соцсетями. Запуск: <span class="mono">run.bat</span>. Код: github.com/adletseitenov/AFMhackathon</p>
+  <!-- 8 · ОЧЕРЕДЬ РИСКОВ -->
+  <section class="slide" data-time="0:30–1:15 · триаж">
+    <div class="kicker"><span class="dot"></span>Приоритетная очередь · аналитик не тонет в потоке</div>
+    <h2>Три уровня риска — что проверять первым, видно сразу</h2>
+    <div class="queue">
+      <div class="row red">
+        <div class="score">91</div>
+        <div><div class="ev">«Занос в казино · промокод BONUS · переходи по ссылке в профиле»</div><div class="meta">TikTok · автопоиск · сигналы: бренд казино, промокод, CTA в личку</div></div>
+        <div><span class="chip red">эскалация ≥ 70</span></div>
+      </div>
+      <div class="row yl">
+        <div class="score">58</div>
+        <div><div class="ev">«Пассивный доход в тенге · инвестиции в Telegram»</div><div class="meta">Telegram · мониторинг · сигналы: обещание дохода, реф-схема</div></div>
+        <div><span class="chip yl">на проверку 40–69</span></div>
+      </div>
+      <div class="row gr">
+        <div class="score">12</div>
+        <div><div class="ev">«Обзор фильма · нейтральный контент»</div><div class="meta">YouTube · автопоиск · сигналов риска не найдено</div></div>
+        <div><span class="chip gr">чисто &lt; 40</span></div>
+      </div>
+    </div>
+    <p class="muted" style="margin-top:14px">Порог калибруется в пользу precision — меньше ложных обвинений. Каждый флаг объясним, все действия пишутся в аудит-лог.</p>
+  </section>
+
+  <!-- 9 · ГРАФ / СЕТЬ -->
+  <section class="slide" data-time="1:55–2:20 · критерий №2 (скрытые связи)">
+    <div class="kicker"><span class="dot"></span>Граф связей · «сеть, а не пост»</div>
+    <h2>Один кошелёк, один промокод, один канал — связывают разрозненные аккаунты в сеть</h2>
+    <div class="grid g2" style="align-items:center">
+      <svg class="net" viewBox="0 0 420 260" role="img" aria-label="граф координированной сети">
+        <line class="lnk" x1="70" y1="50" x2="210" y2="130"/>
+        <line class="lnk" x1="60" y1="130" x2="210" y2="130"/>
+        <line class="lnk" x1="80" y1="210" x2="210" y2="130"/>
+        <line class="lnk" x1="350" y1="60" x2="210" y2="130"/>
+        <line class="lnk" x1="360" y1="200" x2="210" y2="130"/>
+        <circle class="auth" cx="70" cy="50" r="15"/><text x="70" y="53" text-anchor="middle">@a1</text>
+        <circle class="auth" cx="60" cy="130" r="15"/><text x="60" y="133" text-anchor="middle">@a2</text>
+        <circle class="auth" cx="80" cy="210" r="15"/><text x="80" y="213" text-anchor="middle">@a3</text>
+        <circle class="post" cx="350" cy="60" r="13"/><text x="350" y="63" text-anchor="middle">пост</text>
+        <circle class="post" cx="360" cy="200" r="13"/><text x="360" y="203" text-anchor="middle">пост</text>
+        <circle class="ent pulse" cx="210" cy="130" r="26"/><text x="210" y="127" text-anchor="middle">кошелёк</text><text x="210" y="139" text-anchor="middle">bc1q…</text>
+      </svg>
+      <div>
+        <ul class="clean">
+          <li><span class="mk">◎</span><div><b>Координированная сеть</b> вылавливается автоматически — руками такие скрытые связи не найти.</div></li>
+          <li><span class="mk">✂</span><div><b>Точка-перекрытие:</b> один узел, удаление которого обрывает максимум постов — «перекрыв @X, обрываете 7 постов / 4 аккаунта».</div></li>
+          <li><span class="mk">⇲</span><div>Это вход в <b>контр-меры</b>: точка-перекрытие = цель для блокировки.</div></li>
+        </ul>
+        <p class="muted">Это не 14 нарушителей — это <span class="em">один</span>.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10 · ДИФФЕРЕНЦИАТОРЫ / ДОРОЖНАЯ КАРТА -->
+  <section class="slide" data-time="почему мы впереди">
+    <div class="kicker"><span class="dot"></span>Что дальше · и почему мы впереди других команд</div>
+    <h2>Свежее, популярное, актуальное — и сразу понятно, что с этим делать</h2>
+    <div class="grid g2">
+      <div class="card" style="border-left:3px solid var(--redink)">
+        <div class="n">Trend-радар · «Горящая очередь»</div>
+        <h3>danger × velocity × novizna</h3>
+        <p>Аналитик выбирает <b>что искать</b> (казино, телефонное мошенничество, дропы, крипто-удвоение, фейк-работа) и <b>как сортировать</b>: по опасности, новизне, дате, релевантности, популярности, скорости разгона (views/час). Сверху — самое опасное, что <b>разгоняется прямо сейчас</b>. <span class="chip red" style="margin-top:6px">🔥 разгон</span><span class="chip yl">свежее</span></p>
+      </div>
+      <div class="card" style="border-left:3px solid var(--redink)">
+        <div class="n">Контр-пропаганда · «Контр-меры»</div>
+        <h3>как исправить проблему</h3>
+        <p>Стало популярно телефонное мошенничество? КӨЗ предлагает: <b>снять</b> самый вирусный TikTok (проект запроса на блокировку со ссылкой на статью закона РК), <b>кому сообщить</b> (АРРФР / банк / abuse-деск площадки), <b>контр-нарратив</b> («гарантированный доход = красный флаг», «этот человек такого не публиковал»).</p>
+      </div>
+      <div class="card soft"><div class="n">+ Площадки</div><h3>Twitch · Kick</h3><p>Стримы казино и крипто-«разгонов» — новая поверхность мониторинга.</p></div>
+      <div class="card soft"><div class="n">+ Своя модель</div><h3>Новые классы угроз</h3><p>Сигналы вербовки дропов / вишинга / фейк-работы — тем же благословлённым additive-путём, модель сама их читает.</p></div>
+    </div>
+    <p class="muted" style="margin-top:12px">Всё это — поверх ядра, и <span class="em">без нарушения правила</span>: скоринг остаётся sklearn-only, демо остаётся офлайн-способным.</p>
+  </section>
+
+  <!-- 11 · ЭТИКА + МАСШТАБ -->
+  <section class="slide" data-time="2:30–3:00 · критерии №3 и №4">
+    <div class="kicker"><span class="dot"></span>Этика и ИБ (№3) · Масштабируемость (№4)</div>
+    <h2>Сигнал для аналитика, а не приговор</h2>
+    <div class="grid g2">
+      <div class="card">
+        <div class="n">Этика / ИБ</div><h3>Human-in-the-loop</h3>
+        <ul class="clean" style="margin-top:4px">
+          <li><span class="mk">✓</span><div>Приоритизирует, <b>не</b> блокирует и не обвиняет автоматически — решает аналитик.</div></li>
+          <li><span class="mk">✓</span><div>Только публичные данные, минимизация PII, объяснимость каждого флага.</div></li>
+          <li><span class="mk">✓</span><div>Аудит-лог всех действий; SSRF-защита live-проверки.</div></li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="n">Масштаб</div><h3>MVP → прод</h3>
+        <ul class="clean" style="margin-top:4px">
+          <li><span class="mk">→</span><div>Stateless-экстракторы + очередь задач, батчинг.</div></li>
+          <li><span class="mk">→</span><div>SQLite → PostgreSQL + объектное хранилище медиа.</div></li>
+          <li><span class="mk">→</span><div>Авто-роутеры: новые фичи подключаются без правок ядра.</div></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- 12 · СКОРКАРТА -->
+  <section class="slide" data-time="итог">
+    <div class="kicker"><span class="dot"></span>Итог · закрыты все 5 критериев</div>
+    <h2>КӨЗ закрывает формулировку трека один-в-один</h2>
+    <div>
+      <div class="kv"><span class="num">№1</span><span>Актуальность + обоснование AI — масштаб и мультимодальность соцсетей не разобрать вручную.</span><span class="done">✓ слайды 2–3</span></div>
+      <div class="kv"><span class="num">№2</span><span>Своя модель: sklearn, локально, macro-F1 ≈ 0.92, без внешних API в скоринге.</span><span class="done">✓ /api/metrics</span></div>
+      <div class="kv"><span class="num">№3</span><span>ИБ + этика: human-in-the-loop, только публичные данные, объяснимость, аудит-лог.</span><span class="done">✓ в архитектуре</span></div>
+      <div class="kv"><span class="num">№4</span><span>Реализуемость + масштаб: модульный пайплайн, путь SQLite → прод.</span><span class="done">✓ авто-роутеры</span></div>
+      <div class="kv"><span class="num">№5</span><span>Живое демо: автопоиск, доказательства, граф, тренды, PDF, метрики.</span><span class="done">✓ консоль</span></div>
+    </div>
+  </section>
+
+  <!-- 13 · ЗАКРЫТИЕ -->
+  <section class="slide" data-time="3:00 · призыв">
+    <div class="kicker"><span class="dot"></span>КӨЗ · AI Media Watch</div>
+    <div class="hero">
+      <div>
+        <h2 style="font-size:clamp(30px,5vw,56px)">Глаз АФМ над соцсетями.</h2>
+        <p class="lead">Найти опасное · понять, почему опасно · подсказать, как реагировать. Полный цикл — на собственной модели, офлайн, с человеком в контуре.</p>
+        <div class="accentbar"></div>
+        <p class="mono muted">запуск: run.bat &nbsp;·&nbsp; консоль: 127.0.0.1:8000 &nbsp;·&nbsp; github.com/adletseitenov/AFMhackathon</p>
+      </div>
+      <div class="eye-stage" aria-hidden="true">
+        <div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div>
+        <div class="sweep"></div><div class="iris"></div>
+      </div>
+    </div>
   </section>
 
 </div>
 
 <div class="footer">
-  <span>КӨЗ · AI Media Watch · АФМ</span>
-  <span><a id="prev">← назад</a> <span class="mono" id="counter">1 / 7</span> <a id="next">вперёд →</a></span>
+  <span class="brand">
+    <svg class="eye" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="none" stroke="#111" stroke-width="1.2"/><circle cx="8" cy="8" r="2.3" fill="#111"/></svg>
+    КӨЗ · AI Media Watch · АФМ
+  </span>
+  <span class="center"><span class="timing" id="timing"></span></span>
+  <span class="nav">
+    <div class="dots" id="dots"></div>
+    <a id="prev" title="← / PgUp">←</a>
+    <span class="mono" id="counter" style="min-width:54px;text-align:center">1 / 13</span>
+    <a id="next" title="→ / Space / PgDn">→</a>
+    <button id="fs" title="полный экран (F)">⤢</button>
+    <button id="notesBtn" title="заметки спикера (S)">🗒</button>
+  </span>
+</div>
+
+<div id="notes" aria-hidden="true">
+  <div class="nhead">
+    <span><b id="nslide">Слайд 1</b> · <span id="ntime" class="mono"></span></span>
+    <span class="mono">⏱ <span id="ntimer">0:00</span></span>
+    <span class="nhint">S — скрыть · R — сброс таймера</span>
+  </div>
+  <div class="nbody" id="nbody"></div>
 </div>
 
 <script>
   const slides = Array.from(document.querySelectorAll('.slide'));
   let i = 0;
   const counter = document.getElementById('counter');
+  const topbar = document.getElementById('topbar');
+  const timing = document.getElementById('timing');
+  const dotsWrap = document.getElementById('dots');
+
+  // точки навигации
+  slides.forEach((_, k) => {
+    const d = document.createElement('i');
+    d.addEventListener('click', () => show(k));
+    dotsWrap.appendChild(d);
+  });
+  const dots = Array.from(dotsWrap.children);
+
+  function countUp(slide){
+    const el = slide.querySelector('[data-count]');
+    if(!el) return;
+    const target = +el.getAttribute('data-count');
+    const suffix = el.getAttribute('data-suffix') || '';
+    let v = 0, started = null;
+    function step(ts){
+      if(started === null) started = ts;
+      const t = Math.min(1, (ts - started) / 900);
+      const eased = 1 - Math.pow(1 - t, 3);
+      el.textContent = Math.round(eased * target) + suffix;
+      if(t < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  }
+
   function show(n){
     i = Math.max(0, Math.min(slides.length - 1, n));
-    slides.forEach((s, k) => s.classList.toggle('active', k === i));
+    slides.forEach((s, k) => {
+      const on = k === i;
+      s.classList.toggle('active', on);
+    });
+    // перезапуск входной анимации
+    const cur = slides[i];
+    cur.querySelectorAll(':scope > *').forEach(el => { el.style.animation = 'none'; void el.offsetWidth; el.style.animation = ''; });
     counter.textContent = (i + 1) + ' / ' + slides.length;
+    topbar.style.width = ((i) / (slides.length - 1) * 100) + '%';
+    timing.textContent = cur.getAttribute('data-time') || '';
+    dots.forEach((d, k) => d.classList.toggle('on', k === i));
+    countUp(cur);
+    if(notesOn) renderNotes();
+    if(location.hash !== '#' + (i + 1)) history.replaceState(null, '', '#' + (i + 1));
   }
+
   document.getElementById('next').onclick = () => show(i + 1);
   document.getElementById('prev').onclick = () => show(i - 1);
+  document.getElementById('fs').onclick = () => {
+    if(!document.fullscreenElement) document.documentElement.requestFullscreen && document.documentElement.requestFullscreen();
+    else document.exitFullscreen && document.exitFullscreen();
+  };
+
   document.addEventListener('keydown', e => {
-    if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') { e.preventDefault(); show(i + 1); }
-    if (e.key === 'ArrowLeft'  || e.key === 'PageUp') { e.preventDefault(); show(i - 1); }
-    if (e.key === 'Home') show(0);
-    if (e.key === 'End') show(slides.length - 1);
+    if(e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') { e.preventDefault(); show(i + 1); }
+    else if(e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); show(i - 1); }
+    else if(e.key === 'Home') show(0);
+    else if(e.key === 'End') show(slides.length - 1);
+    else if(e.key === 'f' || e.key === 'F' || e.key === 'а' || e.key === 'А') document.getElementById('fs').click();
+    else if(e.key === 's' || e.key === 'S' || e.key === 'ы' || e.key === 'Ы') { e.preventDefault(); toggleNotes(); }
+    else if(e.key === 'r' || e.key === 'R' || e.key === 'к' || e.key === 'К') { startMs = Date.now(); if(notesOn) renderNotes(); }
   });
-  show(0);
+
+  // клик по правой/левой половине экрана (не по интерактивным элементам футера)
+  document.getElementById('deck').addEventListener('click', e => {
+    const x = e.clientX / window.innerWidth;
+    if(x > 0.62) show(i + 1); else if(x < 0.38) show(i - 1);
+  });
+
+  // ---- заметки спикера (суфлёр): текст по слайдам + таймер выступления ----
+  const NOTES = [
+    "Открываем сильно: «В соцсетях Казахстана ежедневно — тысячи роликов с рекламой нелегальных казино, пирамид и мошеннических схем. Руками это не отсмотреть». КӨЗ — с казахского «глаз», ИИ-глаз АФМ. Главная мысль: мы не просто детектируем — проходим полный цикл: Найти → Понять → Действовать. (~20 сек)",
+    "Почему нужен AI: поток круглосуточный, сразу 4+ площадки, контент мультимодальный — видео, речь, текст на экране — и на смеси русского и казахского. Масштаб и мультимодальность вручную не разобрать — это и есть обоснование искусственного интеллекта. (Критерий №1)",
+    "Наше ключевое отличие от других команд: большинство решений — это просто детектор. Мы замыкаем цикл: нашли пост → объяснили, почему он опасен → подсказали аналитику, ЧТО с этим делать. Для АФМ ценность именно в реагировании, а не в ещё одном детекторе.",
+    "Про консоль коротко: пять шагов — собрать, разобрать мультимодально, оценить своей моделью, объяснить, приоритизировать. И принцип: человек всегда в контуре. Система приоритизирует материал для проверки, но не блокирует и не обвиняет сама.",
+    "Демо-крючок. Жмём «Найти опасное в интернете» — система сама обходит соцсети по скам-запросам на русском и казахском и приносит РЕАЛЬНЫЕ посты с кликабельными ссылками и превью. Не подсунутый список — живой поиск. Сейчас 4 площадки; на дорожной карте — Twitch и Kick, стримы казино.",
+    "Сердце проекта и критерий №2. Подчёркиваем: это НЕ обёртка над ChatGPT. Наша обученная sklearn-модель: TF-IDF по словам и по символам + 15 инженерных сигналов, из них 6 — казахстанские (Kaspi, тенге, +7 7XX, 1хбет/мелбет). Голова — логистическая регрессия. macro-F1 около 0.92, обучается локально за 3 секунды, без внешних API. Честно: цифра реальная, не 1.0.",
+    "Кликаем верхний пост — блок «Доказательства»: транскрипт речи (Whisper), текст с экрана (OCR — та самая «табличка» с промокодом), визуальные маркеры (CLIP, например betting_slip 97%). Так ловим промо, спрятанное в аудио или на картинке, даже если заголовок невинный. Важно: эти модели — фичеризаторы, решение всегда принимает наша модель.",
+    "Очередь по риску: красный — эскалация (≥70), жёлтый — на проверку (40–69), зелёный — чисто. Аналитик сразу видит, что брать первым, и не тонет в потоке. Порог настроен в пользу precision — меньше ложных обвинений. Каждый флаг объясним, действия пишутся в аудит-лог.",
+    "Граф связей: один кошелёк, один промокод, один Telegram-канал связывают разрозненные аккаунты в координированную сеть. Показываем точку-перекрытие — узел, удаление которого обрывает максимум постов. Фраза-гвоздь: «Это не 14 нарушителей — это один». Руками такие связи не находятся.",
+    "Куда идём — и почему мы впереди. Trend-радар: аналитик выбирает ТИП угрозы и сортирует по опасности, новизне, дате, скорости разгона — сверху самое горячее прямо сейчас. И контр-меры: система предлагает, КАК реагировать — снять самый вирусный TikTok, проект запроса на блокировку со ссылкой на закон, контр-нарратив против пропаганды.",
+    "Этика встроена в архитектуру (критерий №3): только публичные данные, минимизация персональных данных, объяснимость, аудит-лог, финальное решение за человеком. Масштаб (критерий №4): stateless-воркеры экстракторов, путь SQLite → Postgres + очередь + объектное хранилище; новые фичи подключаются авто-роутерами без правок ядра.",
+    "Подытоживаем: КӨЗ закрывает все пять критериев — актуальность и обоснование AI, собственная модель, этика и ИБ, реализуемость и масштаб, и живое демо. Можно показать пальцем на галочки на экране.",
+    "Закрытие: «КӨЗ — глаз АФМ над соцсетями. Найти, понять, действовать — полный цикл на своей модели, офлайн, с человеком в контуре. Спасибо, готовы к вопросам». (~10 сек, держим зрительный контакт, не частим.)"
+  ];
+  const notesEl = document.getElementById('notes');
+  const nbody = document.getElementById('nbody');
+  const nslide = document.getElementById('nslide');
+  const ntime = document.getElementById('ntime');
+  const ntimer = document.getElementById('ntimer');
+  let notesOn = false, startMs = null;
+  function fmtTime(ms){ const s = Math.max(0, Math.floor(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+  function renderNotes(){
+    nslide.textContent = 'Слайд ' + (i + 1) + ' / ' + slides.length;
+    ntime.textContent = slides[i].getAttribute('data-time') || '';
+    nbody.textContent = NOTES[i] || '— (нет заметок к этому слайду)';
+  }
+  function toggleNotes(){
+    notesOn = !notesOn;
+    notesEl.classList.toggle('on', notesOn);
+    notesEl.setAttribute('aria-hidden', String(!notesOn));
+    document.body.classList.toggle('notes-open', notesOn);
+    if(notesOn){ if(startMs === null) startMs = Date.now(); renderNotes(); }
+  }
+  document.getElementById('notesBtn').onclick = toggleNotes;
+  setInterval(() => { if(notesOn && startMs !== null) ntimer.textContent = fmtTime(Date.now() - startMs); }, 500);
+
+  window.addEventListener('hashchange', () => {
+    const h = parseInt((location.hash || '').slice(1), 10);
+    if(Number.isFinite(h) && h - 1 !== i) show(h - 1);
+  });
+
+  const start = parseInt((location.hash || '').slice(1), 10);
+  show(Number.isFinite(start) && start >= 1 ? start - 1 : 0);
 </script>
 </body>
 </html>
