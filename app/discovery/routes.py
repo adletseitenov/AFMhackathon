@@ -39,6 +39,14 @@ async def api_discover(request: Request, payload: dict | None = Body(default=Non
     raw_platform = payload.get("platform")
     platform = str(raw_platform).lower().strip() if raw_platform else "all"
     deep = bool(payload.get("deep", False))
+    # При включённом глубоком разборе анализируем ВСЕ найденные посты (не только top-N):
+    # высокий дефолт deep_top при deep -> практически «все находки» (с потолком 200 от
+    # рантайма). Можно переопределить payload-ом deep_top. Без deep — лёгкий top-3.
+    try:
+        deep_top = int(payload["deep_top"]) if payload.get("deep_top") is not None else (200 if deep else 3)
+    except (TypeError, ValueError):
+        deep_top = 200 if deep else 3
+    deep_top = max(1, min(200, deep_top))
     raw_country = payload.get("country")
     country = str(raw_country).lower().strip() if raw_country else "all"
     categories = payload.get("categories") if isinstance(payload.get("categories"), list) else None
@@ -73,6 +81,7 @@ async def api_discover(request: Request, payload: dict | None = Body(default=Non
             return discovery_mod.discover(
                 wconn, queries=queries, per_query=per_query,
                 with_telegram=bool(with_tg), platform=platform, deep=deep,
+                deep_top=deep_top,
                 country=country, categories=categories,
                 content_type=content_type, sort=sort,
                 min_risk=min_risk, max_risk=max_risk,
