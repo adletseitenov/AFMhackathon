@@ -642,8 +642,11 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
     elif do_video_platform and platform_added == 0:
         if platform == "instagram":
             if getattr(fetch_mod, "cookies_configured", lambda: False)():
-                note = ("Вход в Instagram (cookies) включён, но постов не найдено — проверьте, что вы "
-                        "залогинены в Instagram в выбранном браузере, либо у этих аккаунтов нет новых постов.")
+                note = ("Вход в Instagram (cookies) включён, но листинг профилей не отдаётся: Instagram "
+                        "АКТИВНО блокирует автоматический сбор по аккаунтам (403/«invalid request») даже "
+                        "для залогиненной сессии. Для Instagram используйте «Живую проверку» отдельной "
+                        "ссылки на reel/пост (одиночные ссылки менее агрессивно блокируются), а автопоиск "
+                        "ведите по TikTok / YouTube / Telegram / Twitch / Kick.")
             else:
                 note = ("Instagram не отдаёт публичный автопоиск без входа. Чтобы включить — добавьте "
                         "cookies авторизованной сессии: экспортируйте cookies.txt (расширение «Get "
