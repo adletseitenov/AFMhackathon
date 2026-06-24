@@ -43,6 +43,9 @@ class Post:
     media_path: str | None
     thumb_url: str | None
     source: str
+    # популярность поста (просмотры). Единственное поле с дефолтом — стоит ПОСЛЕДНИМ,
+    # чтобы dataclass оставался валидным (поля без дефолта идут раньше).
+    view_count: int = 0
 
 
 @dataclass

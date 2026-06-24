@@ -126,6 +126,7 @@ function kozApp() {
     feedError: "",
     categoryFilter: "",
     platformFilter: "",
+    sortBy: "relevance",     // порядок очереди: relevance | novelty | popularity
     realOnly: true,          // ЛЕНТА defaults to real posts only (real_only=1)
     ticking: false,
     _knownIds: new Set(),
@@ -262,6 +263,7 @@ function kozApp() {
       if (this.realOnly) url += "&real_only=1";   // по умолчанию — только реальные посты
       if (this.categoryFilter) url += "&category=" + encodeURIComponent(this.categoryFilter);
       if (this.platformFilter) url += "&platform=" + encodeURIComponent(this.platformFilter);
+      url += "&sort=" + encodeURIComponent(this.sortBy);
       try {
         const r = await fetch(url);
         if (!r.ok) throw new Error("HTTP " + r.status);
@@ -1111,6 +1113,13 @@ function kozApp() {
     },
     categoryLabel(c) { return CATEGORY_LABELS[c] || c; },
     actionLabel(a) { return ACTION_LABELS[a] || a; },
+    // Компактное число просмотров: 1 234 → «1.2K», 3 400 000 → «3.4M».
+    formatViews(n) {
+      const v = Number(n) || 0;
+      if (v >= 1e6) return (v / 1e6).toFixed(v >= 1e7 ? 0 : 1).replace(/\.0$/, "") + "M";
+      if (v >= 1e3) return (v / 1e3).toFixed(v >= 1e4 ? 0 : 1).replace(/\.0$/, "") + "K";
+      return String(v);
+    },
     featureLabel(f) { return FEATURE_LABELS[f] || f; },
     platformIcon(p) { return PLATFORM_ICONS[(p || "").toLowerCase()] || "ph-globe"; },
     platformLabel(id) {

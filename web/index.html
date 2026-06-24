@@ -366,6 +366,12 @@
             <option value="tiktok">TikTok</option>
             <option value="instagram">Instagram</option>
           </select>
+          <select x-model="sortBy" @change="loadFeed()" title="Порядок сортировки очереди"
+                  class="bg-surface border border-line rounded-soft text-[12px] px-2 py-1 outline-none focus:border-muted">
+            <option value="relevance">по релевантности</option>
+            <option value="novelty">по новизне</option>
+            <option value="popularity">по популярности</option>
+          </select>
           <button @click="refresh()" :disabled="ticking" title="Обновить ленту"
                   class="lift inline-flex items-center gap-1.5 px-2.5 py-1 rounded-soft border border-line bg-surface text-[12px] text-ink hover:bg-canvas disabled:opacity-50">
             <i class="ph text-[14px]" :class="ticking ? 'ph-circle-notch animate-spin' : 'ph-arrows-clockwise'"></i><span x-text="ticking ? '…' : 'Обновить'"></span>
@@ -486,6 +492,11 @@
                 <span class="src-badge" x-show="row.post.source">
                   <i :class="'ph ' + sourceIcon(row.post.source) + ' text-[12px]'"></i>
                   <span x-text="sourceLabel(row.post.source)"></span>
+                </span>
+                <!-- просмотры (если известны) -->
+                <span class="src-badge" x-show="row.post.view_count > 0" :title="row.post.view_count + ' просмотров'">
+                  <i class="ph ph-eye text-[12px]"></i>
+                  <span x-text="formatViews(row.post.view_count)"></span>
                 </span>
               </div>
 

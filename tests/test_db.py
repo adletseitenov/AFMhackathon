@@ -34,6 +34,7 @@ def test_posts_columns(tmp_path):
     assert _cols(conn, "posts") == [
         "id", "platform", "author_handle", "url", "caption",
         "posted_at", "media_path", "thumb_url", "source", "revealed",
+        "view_count",
     ]
 
 
@@ -79,7 +80,52 @@ def test_insert_post_and_get(tmp_path):
     assert got.id == "p1"
     assert got.platform == "tiktok"
     assert got.source == "seed"
+    assert got.view_count == 0  # дефолт сохраняется
     assert db.get_post(conn, "missing") is None
+
+
+def test_view_count_round_trips_through_insert_and_get(tmp_path):
+    conn = db.connect(str(tmp_path / "t.db"))
+    db.init_db(conn)
+    p = Post(
+        id="vc1", platform="tiktok", author_handle="@x", url="http://u",
+        caption="играй", posted_at="2026-06-24T10:00:00",
+        media_path=None, thumb_url=None, source="discovered", view_count=98765,
+    )
+    db.insert_post(conn, p)
+    got = db.get_post(conn, "vc1")
+    assert got.view_count == 98765
+    # и через get_revealed_posts тоже
+    conn.execute("UPDATE posts SET revealed=1 WHERE id='vc1'")
+    conn.commit()
+    assert db.get_revealed_posts(conn)[0].view_count == 98765
+
+
+def test_init_db_migrates_existing_db_without_view_count(tmp_path):
+    """Защитная идемпотентная миграция: старая БД без колонки view_count
+    получает её через init_db (ALTER TABLE в try/except)."""
+    import sqlite3
+    dbfile = str(tmp_path / "old.db")
+    # эмулируем СТАРУЮ схему posts без view_count
+    raw = sqlite3.connect(dbfile)
+    raw.execute(
+        "CREATE TABLE posts (id TEXT PRIMARY KEY, platform TEXT, author_handle TEXT, "
+        "url TEXT, caption TEXT, posted_at TEXT, media_path TEXT, thumb_url TEXT, "
+        "source TEXT, revealed INTEGER DEFAULT 0)"
+    )
+    raw.execute(
+        "INSERT INTO posts(id, platform, author_handle, url, caption, posted_at, "
+        "media_path, thumb_url, source, revealed) "
+        "VALUES('old1','tiktok','@x','http://u','c','2026-06-24T10:00:00',NULL,NULL,'seed',1)"
+    )
+    raw.commit()
+    raw.close()
+    conn = db.connect(dbfile)
+    db.init_db(conn)  # должен добавить view_count, не упав на дубле
+    assert "view_count" in _cols(conn, "posts")
+    got = db.get_post(conn, "old1")
+    assert got.view_count == 0  # backfill дефолтом
+    db.init_db(conn)  # повторный вызов остаётся идемпотентным
 
 
 def test_upsert_extracted_roundtrip(tmp_path):

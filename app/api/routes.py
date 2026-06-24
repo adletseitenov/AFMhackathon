@@ -50,6 +50,7 @@ def _post_dict(r) -> dict:
         "id": r["id"], "platform": r["platform"], "author_handle": r["author_handle"],
         "url": r["url"], "caption": r["caption"], "posted_at": r["posted_at"],
         "media_path": r["media_path"], "thumb_url": r["thumb_url"], "source": r["source"],
+        "view_count": r["view_count"],
     }
 
 
@@ -62,8 +63,19 @@ def _score_dict_from_row(r) -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# GET /api/feed — приоритетная очередь revealed-постов, сорт по риску desc.
+# GET /api/feed — приоритетная очередь revealed-постов с выбираемой сортировкой.
 # --------------------------------------------------------------------------- #
+
+# БЕЛЫЙ СПИСОК сортировок -> ФИКСИРОВАННАЯ строка ORDER BY (значение НИКОГДА не
+# интерполируется из ввода пользователя — мы лишь выбираем заранее заданную строку).
+# Для novelty/popularity добавлен стабильный тай-брейкер по риску.
+_SORT_ORDER_BY = {
+    "relevance": "s.risk DESC",
+    "novelty": "p.posted_at DESC, s.risk DESC",
+    "popularity": "p.view_count DESC, s.risk DESC",
+}
+_DEFAULT_SORT = "relevance"
+
 
 @router.get("/api/feed")
 def api_feed(
@@ -73,11 +85,15 @@ def api_feed(
     platform: "str | None" = Query(None),
     limit: int = Query(100),
     real_only: int = Query(0),
+    sort: str = Query(_DEFAULT_SORT),
 ):
     conn = request.app.state.db
+    # Неизвестное/пустое значение -> relevance (см. _SORT_ORDER_BY).
+    order_by = _SORT_ORDER_BY.get((sort or "").lower().strip(),
+                                  _SORT_ORDER_BY[_DEFAULT_SORT])
     sql = (
         "SELECT p.id, p.platform, p.author_handle, p.url, p.caption, p.posted_at, "
-        "p.media_path, p.thumb_url, p.source, "
+        "p.media_path, p.thumb_url, p.source, p.view_count, "
         "s.post_id, s.risk, s.category, s.class_probs_json, s.top_features_json, "
         "s.recommended_action "
         "FROM posts p JOIN scores s ON s.post_id = p.id "
@@ -94,7 +110,7 @@ def api_feed(
     if platform:
         sql += " AND p.platform = ?"
         params.append(platform)
-    sql += " ORDER BY s.risk DESC LIMIT ?"
+    sql += f" ORDER BY {order_by} LIMIT ?"
     params.append(limit)
 
     rows = conn.execute(sql, params).fetchall()

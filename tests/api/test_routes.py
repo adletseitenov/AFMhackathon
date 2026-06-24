@@ -25,12 +25,13 @@ from app.models import Extracted, Post, Score, FeatureHit
 
 
 def _add_post(conn, pid, risk, category, action, revealed,
-              posted_at="2026-06-24T10:00:00", caption="cap"):
+              posted_at="2026-06-24T10:00:00", caption="cap", view_count=0):
     conn.execute(
         "INSERT INTO posts(id, platform, author_handle, url, caption, posted_at, "
-        "media_path, thumb_url, source, revealed) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        "media_path, thumb_url, source, revealed, view_count) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
         (pid, "tiktok", "@" + pid, "https://x/" + pid, caption, posted_at,
-         None, None, "seed", revealed),
+         None, None, "seed", revealed, view_count),
     )
     conn.execute(
         "INSERT INTO scores(post_id, risk, category, class_probs_json, "
@@ -87,6 +88,69 @@ def test_feed_limit(feed_client):
     data = feed_client.get("/api/feed?limit=1").json()
     assert len(data) == 1
     assert data[0]["post"]["id"] == "p1"
+
+
+def test_feed_post_dict_includes_view_count(feed_client):
+    row = feed_client.get("/api/feed").json()[0]
+    assert "view_count" in row["post"]
+
+
+# --- SORTING (приоритетная очередь) -------------------------------------- #
+
+@pytest.fixture
+def sort_client(tmp_path, monkeypatch):
+    """3 revealed-поста, у которых risk / posted_at / view_count дают РАЗНЫЙ порядок.
+
+      a: risk=90, posted 10:00 (старейший), view_count=10
+      b: risk=50, posted 12:00 (новейший), view_count=999
+      c: risk=70, posted 11:00,            view_count=500
+    relevance(risk)  -> a,c,b ; novelty(posted_at) -> b,c,a ; popularity(views) -> b,c,a.
+    """
+    dbfile = tmp_path / "sort.db"
+    monkeypatch.setattr(config, "DB_PATH", dbfile)
+    conn = db.connect()
+    db.init_db(conn)
+    _add_post(conn, "a", 90, "gambling", "escalate", 1,
+              posted_at="2026-06-24T10:00:00", view_count=10)
+    _add_post(conn, "b", 50, "gambling", "review", 1,
+              posted_at="2026-06-24T12:00:00", view_count=999)
+    _add_post(conn, "c", 70, "gambling", "escalate", 1,
+              posted_at="2026-06-24T11:00:00", view_count=500)
+    conn.close()
+    with TestClient(app) as c:
+        yield c
+
+
+def _ids(client, qs=""):
+    return [r["post"]["id"] for r in client.get("/api/feed" + qs).json()]
+
+
+def test_sort_relevance_orders_by_risk_desc(sort_client):
+    assert _ids(sort_client, "?sort=relevance") == ["a", "c", "b"]
+
+
+def test_sort_default_is_relevance(sort_client):
+    assert _ids(sort_client) == ["a", "c", "b"]
+
+
+def test_sort_novelty_orders_by_posted_at_desc(sort_client):
+    assert _ids(sort_client, "?sort=novelty") == ["b", "c", "a"]
+
+
+def test_sort_popularity_orders_by_view_count_desc(sort_client):
+    assert _ids(sort_client, "?sort=popularity") == ["b", "c", "a"]
+
+
+def test_sort_unknown_falls_back_to_relevance(sort_client):
+    assert _ids(sort_client, "?sort=bogus") == ["a", "c", "b"]
+    assert _ids(sort_client, "?sort=") == ["a", "c", "b"]
+
+
+def test_sort_combines_with_filters(sort_client):
+    # фильтр min_risk совместно с novelty: остаются a(90),c(70), порядок по дате desc
+    assert _ids(sort_client, "?sort=novelty&min_risk=70") == ["c", "a"]
+    # popularity + limit
+    assert _ids(sort_client, "?sort=popularity&limit=1") == ["b"]
 
 
 @pytest.fixture

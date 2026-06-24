@@ -47,6 +47,7 @@ def search_youtube(query: str, limit: int = 5) -> list:
                 "author_handle": e.get("uploader") or e.get("channel") or e.get("uploader_id") or "",
                 "caption": e.get("title") or "",
                 "thumb_url": f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg",
+                "view_count": e.get("view_count") or 0,
             })
     except Exception:
         return out

@@ -32,10 +32,26 @@ def test_extracted_fields():
 
 
 def test_post_fields():
+    # view_count — последнее поле (единственное с дефолтом, чтобы dataclass был валиден).
     assert _names(Post) == [
         "id", "platform", "author_handle", "url", "caption",
-        "posted_at", "media_path", "thumb_url", "source",
+        "posted_at", "media_path", "thumb_url", "source", "view_count",
     ]
+
+
+def test_post_view_count_defaults_to_zero():
+    p = Post(
+        id="p1", platform="tiktok", author_handle="@x", url="http://u",
+        caption="c", posted_at="2026-06-24T10:00:00",
+        media_path=None, thumb_url=None, source="seed",
+    )
+    assert p.view_count == 0
+    p2 = Post(
+        id="p2", platform="tiktok", author_handle="@x", url="http://u",
+        caption="c", posted_at="2026-06-24T10:00:00",
+        media_path=None, thumb_url=None, source="seed", view_count=4200,
+    )
+    assert p2.view_count == 4200
 
 
 def test_feature_hit_fields():

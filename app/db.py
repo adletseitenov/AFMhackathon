@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS posts (
     media_path TEXT,
     thumb_url TEXT,
     source TEXT,
-    revealed INTEGER DEFAULT 0
+    revealed INTEGER DEFAULT 0,
+    view_count INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS extracted (
     post_id TEXT PRIMARY KEY,
@@ -55,7 +56,7 @@ CREATE TABLE IF NOT EXISTS audit (
 
 _POST_COLS = (
     "id", "platform", "author_handle", "url", "caption",
-    "posted_at", "media_path", "thumb_url", "source",
+    "posted_at", "media_path", "thumb_url", "source", "view_count",
 )
 
 
@@ -71,8 +72,15 @@ def connect(path: "str | Path | None" = None) -> sqlite3.Connection:
 
 
 def init_db(conn: sqlite3.Connection) -> None:
-    """Создать все таблицы (идемпотентно)."""
+    """Создать все таблицы (идемпотентно) + защитные миграции для старых БД."""
     conn.executescript(SCHEMA)
+    # Защитная идемпотентная миграция: старые БД создавались без колонки view_count.
+    # ALTER TABLE ... ADD COLUMN на уже существующей колонке кидает OperationalError —
+    # ловим и игнорируем (already-exists это норма).
+    try:
+        conn.execute("ALTER TABLE posts ADD COLUMN view_count INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass  # колонка уже есть — ничего не делаем
     conn.commit()
 
 
@@ -83,10 +91,10 @@ def _post_from_row(r: sqlite3.Row) -> Post:
 def insert_post(conn: sqlite3.Connection, post: Post) -> None:
     conn.execute(
         "INSERT OR REPLACE INTO posts "
-        "(id, platform, author_handle, url, caption, posted_at, media_path, thumb_url, source) "
-        "VALUES (?,?,?,?,?,?,?,?,?)",
+        "(id, platform, author_handle, url, caption, posted_at, media_path, thumb_url, source, view_count) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?)",
         (post.id, post.platform, post.author_handle, post.url, post.caption,
-         post.posted_at, post.media_path, post.thumb_url, post.source),
+         post.posted_at, post.media_path, post.thumb_url, post.source, post.view_count),
     )
     conn.commit()
 
@@ -94,7 +102,7 @@ def insert_post(conn: sqlite3.Connection, post: Post) -> None:
 def get_post(conn: sqlite3.Connection, post_id: str) -> "Post | None":
     r = conn.execute(
         "SELECT id, platform, author_handle, url, caption, posted_at, "
-        "media_path, thumb_url, source FROM posts WHERE id=?",
+        "media_path, thumb_url, source, view_count FROM posts WHERE id=?",
         (post_id,),
     ).fetchone()
     return _post_from_row(r) if r is not None else None
@@ -103,7 +111,7 @@ def get_post(conn: sqlite3.Connection, post_id: str) -> "Post | None":
 def get_revealed_posts(conn: sqlite3.Connection) -> list[Post]:
     rows = conn.execute(
         "SELECT id, platform, author_handle, url, caption, posted_at, "
-        "media_path, thumb_url, source FROM posts WHERE revealed=1 ORDER BY posted_at"
+        "media_path, thumb_url, source, view_count FROM posts WHERE revealed=1 ORDER BY posted_at"
     ).fetchall()
     return [_post_from_row(r) for r in rows]
 

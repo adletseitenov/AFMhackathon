@@ -105,9 +105,9 @@ def test_youtube_dedup_by_video_id(monkeypatch):
         def __exit__(self, *a): return False
         def extract_info(self, q, download=False):
             return {"entries": [
-                {"id": "abcdefghijk", "title": "t1"},
+                {"id": "abcdefghijk", "title": "t1", "view_count": 12345},
                 {"id": "abcdefghijk", "title": "dup"},  # дубль того же id
-                {"id": "lmnopqrstuv", "title": "t2"},
+                {"id": "lmnopqrstuv", "title": "t2"},   # без view_count -> 0
             ]}
     import sys, types
     fake = types.ModuleType("yt_dlp"); fake.YoutubeDL = _FakeYDL
@@ -116,6 +116,9 @@ def test_youtube_dedup_by_video_id(monkeypatch):
     vids = [o["video_id"] for o in out]
     assert vids == ["abcdefghijk", "lmnopqrstuv"]  # дубль отброшен
     assert all("i.ytimg.com" in o["thumb_url"] for o in out)
+    # популярность: capture view_count (отсутствует -> 0)
+    assert out[0]["view_count"] == 12345
+    assert out[1]["view_count"] == 0
 
 
 def _ddg_html(names):
@@ -240,10 +243,11 @@ def test_platform_tiktok_uses_account_listing_and_meta(tmp_path, monkeypatch):
     assert res["platform_added"] == 1
     assert res["youtube_added"] == 0  # ytsearch не используется для tiktok
     assert res["added"] == 1
-    rows = conn.execute("SELECT url, platform, source FROM posts").fetchall()
+    rows = conn.execute("SELECT url, platform, source, view_count FROM posts").fetchall()
     assert rows[0]["url"] == "https://www.tiktok.com/@promo/video/123"
     assert rows[0]["platform"] == "tiktok"
     assert rows[0]["source"] == "discovered"
+    assert rows[0]["view_count"] == 1000  # популярность из list_account_posts
     assert res["flagged"] >= 1  # казино-подпись + хэндл -> эскалация
 
 

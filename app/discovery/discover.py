@@ -123,7 +123,7 @@ def _ingest_video_platform(conn, platform: str, accounts: list, per_account: int
                 url=url, caption=cap,
                 posted_at=datetime.now(timezone.utc).isoformat(),
                 media_path=None, thumb_url=p.get("thumb_url") or None,
-                source="discovered",
+                source="discovered", view_count=p.get("view_count") or 0,
             )
             try:
                 sc = _ingest(conn, post, cap, score_text=score_text)
@@ -174,6 +174,7 @@ def _deep_analyze(conn, fresh: list, deep_top: int, report=None) -> dict:
                 id=post.id, platform=post.platform, author_handle=post.author_handle,
                 url=post.url, caption=post.caption, posted_at=post.posted_at,
                 media_path=media_path, thumb_url=post.thumb_url, source=post.source,
+                view_count=post.view_count,
             )
             ex = pipeline_mod.extract(media_post, use_cache=False)
             db.upsert_extracted(conn, ex)
@@ -239,6 +240,7 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
                     author_handle=it.get("author_handle") or "", url=url, caption=cap,
                     posted_at=datetime.now(timezone.utc).isoformat(),
                     media_path=None, thumb_url=it.get("thumb_url") or None, source="discovered",
+                    view_count=it.get("view_count") or 0,
                 )
                 sc = _ingest(conn, post, cap)
                 added += 1
