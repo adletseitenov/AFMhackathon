@@ -416,6 +416,57 @@ FIGURE_CLEAN_RU = [
 ]
 
 # =====================================================================
+#  АНГЛОЯЗЫЧНЫЙ СТРИМ-ГЕМБЛИНГ (Twitch/Kick) — crypto-casino bonus-hunt контент.
+#
+#  RU/KZ-модель его НЕ ловила. ПОЗИТИВЫ (gambling): реалистичные англо-заголовки
+#  стримов (Stake/Roobet/Gamdom/Rollbit, bonus hunt/opening, slots, MAX WIN,
+#  $650,000 bonus). ХАРД-НЕГАТИВЫ (clean): англо-контент БЕЗ гемблинга — геймплей
+#  не-казино игр, киберспорт, новости про регулирование/налогообложение ставок —
+#  чтобы новый сигнал streaming_casino_brand не давал false-positive.
+# =====================================================================
+
+# --- GAMBLING (EN) — стрим-казино позитивы ---
+STREAM_CASINO_EN = [
+    "xposed ${bonusamt} BONUS HUNT !{enbrand} bonus opening tonight",
+    "NOW OPENING {count} ${bonusamt} BONUSES !{enbrand} insane session",
+    "MAX WIN on {slotgame} slot at {enbrand}, code {code} for free spins",
+    "Roshtein big win casino stream — {slotgame} mega win on {enbrand}",
+    "${bonusamt} bonus hunt on {enbrand}!! slots only, code {code} 🎰",
+    "BIGGEST WIN of the year on {slotgame}, {enbrand} jackpot hit 💰",
+    "live bonus opening on {enbrand}, {count} bonuses, free spins ready",
+    "gambling {amount} on stake.com tonight, slots and roulette only",
+    "new slot {slotgame} review — bonus buy on {enbrand}, mega win incoming",
+    "sweeps casino giveaway on {enbrand}, claim free spins with code {code}",
+    "{enbrand} slots session: chasing the ${bonusamt} max win, big win clip 🎰",
+    "trying the {bonusamt}x bonus buy on {slotgame}, {enbrand} stream live now",
+]
+
+# --- CLEAN (EN) — англо хард-негативы (НЕ гемблинг) ---
+CLEAN_STREAM_EN = [
+    "great football match highlights from last night, what a comeback",
+    "CS2 major grand final clutch, insane esports moment caught on stream",
+    "Minecraft survival episode {count}: building a brand new base today",
+    "Elden Ring boss fight, finally beat it after {count} tries no cheese",
+    "new regulator report on online betting taxation policy in the EU",
+    "speedrun world record attempt on the classic platformer, so close",
+    "cooking stream tonight: making homemade pasta from scratch, come hang",
+    "react video to the {slotgame} game trailer — looks like a fun rpg honestly",
+    "review of the new graphics card, benchmarks and gameplay at 4k",
+    "valorant ranked grind to radiant, team comms only, no toxicity",
+    "documentary on problem gambling addiction and where to get help",
+    "league of legends worlds recap: the best teamfights of the tournament",
+]
+
+# --- BOUNDARY (gambling <-> clean, EN): стрим-контент, спорно реклама/обзор ---
+EN_BOUNDARY_GAMBLING_CLEAN = [
+    "talking about the {slotgame} slot on stream, is it rigged? just my opinion",
+    "react to a big win clip someone sent, casino streams are wild these days",
+    "{enbrand} sponsored the event but i'm not promoting gambling, just news",
+    "watched a bonus hunt video, here's why slots streams are controversial",
+    "is {enbrand} legit? breaking down how these casino streams actually work",
+]
+
+# =====================================================================
 #  слоты
 # =====================================================================
 BRANDS = [
@@ -443,6 +494,18 @@ PROJNAMES = [
     "FinexPro", "CryptoBoost", "GlobalInvest", "BitDoubler", "MoneyFlow",
     "TokenX", "ProfitHub", "StableGain", "VipFund", "QuantumPay",
 ]
+# Англоязычный стрим-гемблинг: крипто-казино бренды, названия слотов, суммы бонусов.
+ENBRANDS = [
+    "stake", "stake.com", "roobet", "gamdom", "rollbit",
+    "duelbits", "csgoroll", "bc.game", "betclic", "stake us",
+]
+SLOTGAMES = [
+    "Gates of Olympus", "Sweet Bonanza", "Sugar Rush", "Big Bass Bonanza",
+    "The Dog House", "Wanted Dead or a Wild", "Money Train", "Book of Dead",
+]
+BONUSAMTS = [
+    "650,000", "30,000", "100,000", "10,000", "250,000", "1,000,000", "50,000",
+]
 
 
 def _fill(tpl: str) -> str:
@@ -459,6 +522,9 @@ def _fill(tpl: str) -> str:
         coef=random.choice(COEFS),
         projname=random.choice(PROJNAMES),
         figure=random.choice(FIGURES),
+        enbrand=random.choice(ENBRANDS),
+        slotgame=random.choice(SLOTGAMES),
+        bonusamt=random.choice(BONUSAMTS),
     )
 
 
@@ -558,6 +624,18 @@ def build_rows():
     rows += _expand(FIGURE_FRAUD_RU, "ru", "fraud", 40)
     rows += _expand(FIGURE_PYRAMID_RU, "ru", "pyramid", 40)
     rows += _expand(FIGURE_CLEAN_RU, "ru", "clean", 48)
+
+    # --- АНГЛОЯЗЫЧНЫЙ СТРИМ-ГЕМБЛИНГ (Twitch/Kick) ---
+    # ПОЗИТИВЫ (gambling) учат модель связывать Stake/Roobet/bonus-hunt/slots с
+    # gambling-классом; англо хард-негативы (clean) — геймплей/киберспорт/новости —
+    # держат false-positive rate низким. Граничная коллизия gambling<->clean
+    # масштабирует off-diagonal путаницу В ТАКТ с новыми ядровыми позитивами
+    # (gotcha: уникальные англо-фразы TF-IDF запоминает -> macro_f1 уползёт к 1.0).
+    rows += _expand(STREAM_CASINO_EN, "ru", "gambling", 56)
+    rows += _expand(CLEAN_STREAM_EN, "ru", "clean", 56)
+    rows += _expand_boundary(
+        EN_BOUNDARY_GAMBLING_CLEAN, "ru", "gambling", "clean", 40, frac_a=0.55
+    )
 
     random.shuffle(rows)
     return rows

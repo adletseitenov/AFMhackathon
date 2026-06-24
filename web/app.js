@@ -58,6 +58,8 @@ const PLATFORM_ICONS = {
   instagram: "ph-instagram-logo",
   youtube: "ph-youtube-logo",
   telegram: "ph-telegram-logo",
+  twitch: "ph-twitch-logo",
+  kick: "ph-monitor-play",
   link: "ph-link",
   upload: "ph-upload-simple",
 };
@@ -150,6 +152,8 @@ function kozApp() {
       { id: "telegram",  label: "Telegram" },
       { id: "tiktok",    label: "TikTok" },
       { id: "instagram", label: "Instagram" },
+      { id: "twitch",    label: "Twitch" },
+      { id: "kick",      label: "Kick" },
     ],
 
     // --- telegram scanner (Лента) ---
@@ -211,6 +215,14 @@ function kozApp() {
     trendsError: "",
     _charts: {},
     _trendsLoaded: false,
+
+    // --- рекомендации АФМ (GET /api/recommendations) ---
+    // {stats:{total_posts, flagged, top_platform, top_brand},
+    //  recommendations:[{title, rationale, action, priority:'high'|'medium'|'low', evidence}]}
+    recommendations: [],
+    recsStats: null,
+    recsLoading: false,
+    recsError: "",
 
     // --- live check (async job: POST /api/analyze -> {job_id}; poll /api/jobs/{id}) ---
     liveUrl: "",
@@ -700,6 +712,8 @@ function kozApp() {
     // ===================================================== trends
     async loadTrends() {
       this.trendsError = "";
+      // превентивные рекомендации тянем параллельно — независимая панель
+      this.loadRecommendations();
       try {
         const r = await fetch("/api/trends");
         if (!r.ok) throw new Error("HTTP " + r.status);
@@ -713,6 +727,46 @@ function kozApp() {
         return;
       }
       this.$nextTick(() => this.renderCharts());
+    },
+
+    // ===================================================== рекомендации АФМ
+    //
+    // GET /api/recommendations -> {stats:{total_posts, flagged, top_platform, top_brand},
+    //   recommendations:[{title, rationale, action, priority, evidence}]}.
+    // Превентивные действия по выявленным трендам; рендерятся карточками внизу
+    // вкладки «Тренды». Приоритет красит бейдж (high/medium/low — палитра риска).
+    async loadRecommendations() {
+      if (this.recsLoading) return;
+      this.recsLoading = true;
+      this.recsError = "";
+      try {
+        const r = await fetch("/api/recommendations");
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const data = await r.json();
+        this.recommendations = (data && data.recommendations) || [];
+        this.recsStats = (data && data.stats) || null;
+        this.$nextTick(() => observeReveals());
+      } catch (e) {
+        this.recommendations = [];
+        this.recsStats = null;
+        this.recsError = "Не удалось загрузить рекомендации: " + e.message;
+      } finally {
+        this.recsLoading = false;
+      }
+    },
+
+    // Палитра бейджа приоритета (зафиксированная риск-палитра).
+    priorityBadge(priority) {
+      const p = String(priority || "").toLowerCase();
+      if (p === "high")   return "background:#FDEBEC;color:#9F2F2D";
+      if (p === "medium") return "background:#FBF3DB;color:#956400";
+      return "background:#EDF3EC;color:#346538"; // low / прочее
+    },
+    priorityLabel(priority) {
+      const p = String(priority || "").toLowerCase();
+      if (p === "high")   return "высокий";
+      if (p === "medium") return "средний";
+      return "низкий";
     },
 
     _chart(id, config) {

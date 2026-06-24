@@ -9,6 +9,7 @@ Telegram-каналы через веб-поиск), скорит собстве
 import hashlib
 from datetime import datetime, timezone
 
+import app.discovery.streaming as streaming_mod
 import app.extractors.pipeline as pipeline_mod
 import app.ingestion.fetch as fetch_mod
 from app import config, db
@@ -22,6 +23,20 @@ from app.models import Extracted, Post
 
 # Площадки коротких видео для платформенного поиска.
 _VIDEO_PLATFORMS = {"tiktok", "instagram"}
+
+# Стриминговые площадки (гемблинг-стримы slots/casino/BONUS HUNT) — отдельный
+# источник: VOD-ы курируемых стримеров казино/слотов через app.discovery.streaming.
+_STREAMING_PLATFORMS = {"twitch", "kick"}
+
+# Курируемые гемблинг-стримеры: их VOD-заголовки (slots/casino/BONUS HUNT под
+# STAKE/roobet) — нелегальная реклама казино в РК. Имя стримера + заголовок дают
+# сигнал казино при скоринге. Списки можно monkeypatch'ить в тестах.
+_TWITCH_SEED_STREAMERS = [
+    "xposed", "roshtein", "classybeef", "trainwreckstv", "ayezee",
+]
+_KICK_SEED_STREAMERS = [
+    "roshtein", "xposed", "trainwreck", "classybeef", "slots",
+]
 
 # Поисковики НЕ индексируют отдельные tiktok/instagram-видео (и DDG-выдача
 # часто недоступна), поэтому надёжный путь — нативный yt-dlp по странице
@@ -141,6 +156,75 @@ def _ingest_video_platform(conn, platform: str, accounts: list, per_account: int
             "accounts_ok": accounts_ok}
 
 
+def _streaming_streamers(platform: str) -> list:
+    return _KICK_SEED_STREAMERS if platform == "kick" else _TWITCH_SEED_STREAMERS
+
+
+def _fetch_streaming(platform: str, streamer: str, per_streamer: int) -> list:
+    """РОБАСТНЫЙ вызов сборщика VOD-ов нужной площадки (через module-attribute, чтобы
+    тесты monkeypatch'или streaming_mod.fetch_*). [] при сбое (не пробрасывает)."""
+    try:
+        if platform == "kick":
+            return streaming_mod.fetch_kick_videos(streamer, per_streamer)
+        return streaming_mod.fetch_twitch_videos(streamer, per_streamer)
+    except Exception:
+        return []
+
+
+def _ingest_streaming(conn, platform: str, streamers: list, per_streamer: int,
+                      seen_urls: set, by_category: dict, samples: list,
+                      fresh_out: list, report=None) -> dict:
+    """Автопоиск гемблинг-контента на TWITCH/KICK по курируемым стримерам казино/слотов.
+
+    Для каждого стримера тянем VOD-ы (streaming_mod.fetch_kick_videos /
+    fetch_twitch_videos — РОБАСТНЫ, [] при сбое), строим Post(platform=<twitch|kick>,
+    source="discovered") и скорим по «<стример> <заголовок>» (имя гемблинг-стримера
+    + казино-термины заголовка дают сигнал казино). Дедуп по seen_urls + _pid +
+    db.get_post. Свежие посты кладём в fresh_out для опционального deep-разбора. Любой
+    сбой по стримеру/видео проглатывается. -> {"added","flagged"}.
+    """
+    added = flagged = 0
+    n = max(1, len(streamers))
+    for i, streamer in enumerate(streamers):
+        if report:
+            report(f"{platform}: {streamer}", 5 + int(70 * i / n))
+        videos = _fetch_streaming(platform, streamer, per_streamer)
+        for v in videos:
+            url = v.get("url")
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            pid = _pid(platform, url)
+            if db.get_post(conn, pid) is not None:
+                continue
+            author = (v.get("author_handle") or streamer).lstrip("@")
+            title = v.get("title") or v.get("description") or ""
+            cap = normalize(title)
+            # «<стример> <заголовок>»: имя гемблинг-стримера + казино-термины
+            # (STAKE/roobet/BONUS HUNT/слоты) — сильные сигналы рекламы казино.
+            score_text = normalize(f"{author} {title}".strip())
+            post = Post(
+                id=pid, platform=platform, author_handle=author,
+                url=url, caption=cap,
+                posted_at=datetime.now(timezone.utc).isoformat(),
+                media_path=None, thumb_url=v.get("thumb_url") or None,
+                source="discovered", view_count=v.get("view_count") or 0,
+            )
+            try:
+                sc = _ingest(conn, post, cap, score_text=score_text)
+            except Exception:
+                continue
+            added += 1
+            if sc.category in by_category:
+                by_category[sc.category] += 1
+            if sc.risk >= config.ESCALATE_THRESHOLD:
+                flagged += 1
+            fresh_out.append({"post": post, "risk": sc.risk})
+            samples.append({"url": post.url, "platform": platform,
+                            "risk": sc.risk, "category": sc.category})
+    return {"added": added, "flagged": flagged}
+
+
 def _deep_analyze(conn, fresh: list, deep_top: int, report=None) -> dict:
     """ГЛУБОКИЙ мультимодальный разбор top-N свежедобавленных постов по риску.
 
@@ -197,7 +281,9 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
 
     platform: "all" (youtube+telegram), "youtube" (только ytsearch),
       "telegram" (только поиск+скан каналов), "tiktok"/"instagram"
-      (best-effort site:<host> поиск видео-ссылок -> fetch_post -> ingest+score).
+      (best-effort site:<host> поиск видео-ссылок -> fetch_post -> ingest+score),
+      "twitch"/"kick" (VOD-ы курируемых гемблинг-стримеров казино/слотов через
+      app.discovery.streaming -> ingest+score).
     deep: при True после YouTube-ингестии берёт top-`deep_top` свежих постов по
       риску, реально качает видео и прогоняет мультимодальный разбор
       (Whisper+EasyOCR+CLIP) с пере-скорингом — ловит промо, спрятанное в
@@ -216,6 +302,7 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
     do_youtube = platform in ("all", "youtube")
     do_telegram = with_telegram and platform in ("all", "telegram")
     do_video_platform = platform in _VIDEO_PLATFORMS
+    do_streaming = platform in _STREAMING_PLATFORMS
 
     # 1) YouTube — реальные ролики с реальными ссылками.
     if do_youtube:
@@ -269,6 +356,21 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
         platform_found = res.get("found", 0)
         platform_accounts_ok = res.get("accounts_ok", 0)
 
+    # 1c) Twitch/Kick — VOD-ы курируемых гемблинг-стримеров казино/слотов
+    #     (slots/casino/BONUS HUNT под STAKE/roobet — нелегальная реклама казино).
+    fresh_streaming: list = []
+    if do_streaming:
+        streamers = _streaming_streamers(platform)
+        # Тянем поглубже в архив каждого стримера (1 запрос/стример) — повторные
+        # прогоны находят НОВЫЕ VOD-ы. Тот же кап, что и для tiktok.
+        per_streamer = max(10, min(20, per_query * 4))
+        sres = _ingest_streaming(
+            conn, platform, streamers, per_streamer,
+            seen_urls, by_category, samples, fresh_streaming, report=report,
+        )
+        platform_added += sres["added"]
+        flagged += sres["flagged"]
+
     # 2) Telegram — курируемые казино-каналы (надёжно) + DDG best-effort + СНЕЖНЫЙ КОМ
     #    по t.me-ссылкам в сообщениях: находит НОВЫЕ каналы И ЧАТЫ (не только каналы).
     tg_chats: list = []
@@ -306,9 +408,9 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
         except Exception:
             pass
 
-    # 3) ГЛУБОКИЙ мультимодальный разбор top-постов (опционально) — youtube + tiktok.
+    # 3) ГЛУБОКИЙ мультимодальный разбор top-постов (опц.) — youtube + tiktok + twitch/kick.
     deep_analyzed = 0
-    deep_pool = fresh_yt + fresh_platform
+    deep_pool = fresh_yt + fresh_platform + fresh_streaming
     if deep and deep_pool:
         try:
             dres = _deep_analyze(conn, deep_pool, deep_top, report=report)

@@ -181,6 +181,24 @@ HANDCRAFTED_SIGNALS = [
         "evidence_ru": "Кириллическое написание нелегального букмекера/казино или HYIP-бренда (1хбет, мелбет, Финико)",
     },
     {
+        # Англоязычный стрим-гемблинг (Twitch/Kick): крипто-казино бренды и
+        # лексика bonus-hunt-стримов. RU/KZ-сигналы это НЕ ловили. Аддитивный
+        # regex-сигнал по НОРМАЛИЗОВАННОМУ тексту (build_features проходит его
+        # штатно по списку). Границы слов аккуратные, чтобы 'slot' не ловил
+        # 'slotted'/'slothful'; в gambling-контексте уклон допустим.
+        "name": "streaming_casino_brand",
+        "pattern": re.compile(
+            r"(stake\.com|\bstake\b(\s+us)?|roobet|gamdom|rollbit|duelbits|"
+            r"csgoroll|betclic|\bbc\.?game\b|\broobet\b|"
+            r"bonus\s+hunt|bonus\s+buy|bonus\s+opening|"
+            r"\bslots?\b|\bcasino\b|\bgamble\b|\bjackpot\b|"
+            r"free\s+spins?|max\s+win|big\s+win|mega\s+win|\bsweeps\b)",
+            re.I | re.U,
+        ),
+        "category_hint": "gambling",
+        "evidence_ru": "Англоязычный казино-бренд/стрим-гемблинг (Stake, Roobet, bonus hunt, slots)",
+    },
+    {
         # F10 — импесонация публичной фигуры. pattern=None: вычисляется в build_features
         # газеттиром public_figures.match() по НОРМАЛИЗОВАННОМУ тексту (как visual_gambling
         # берётся из visual_concepts). НЕ переименовывать/не удалять существующие ключи.

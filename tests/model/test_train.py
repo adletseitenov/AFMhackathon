@@ -14,7 +14,9 @@ from scripts.gen_dataset import main as gen_main
 
 def test_build_rows_volume_and_schema():
     rows = build_rows()
-    assert 800 <= len(rows) <= 1400
+    # Верхняя граница расширена под англо-стрим-гемблинг позитивы/негативы
+    # (новый сигнал streaming_casino_brand) — датасет вырос до ~1485 строк.
+    assert 800 <= len(rows) <= 1700
     for r in rows:
         assert set(r.keys()) == {"text", "lang", "label"}
         assert r["lang"] in {"ru", "kk"}

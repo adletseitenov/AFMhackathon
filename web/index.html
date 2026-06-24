@@ -365,6 +365,8 @@
             <option value="telegram">Telegram</option>
             <option value="tiktok">TikTok</option>
             <option value="instagram">Instagram</option>
+            <option value="twitch">Twitch</option>
+            <option value="kick">Kick</option>
           </select>
           <select x-model="sortBy" @change="loadFeed()" title="Порядок сортировки очереди"
                   class="bg-surface border border-line rounded-soft text-[12px] px-2 py-1 outline-none focus:border-muted">
@@ -861,6 +863,70 @@
               </div>
             </template>
           </div>
+        </div>
+      </div>
+
+      <!-- ===== Рекомендации АФМ — превентивные действия по трендам ===== -->
+      <div class="mt-6">
+        <div class="flex flex-wrap items-center gap-3 mb-3">
+          <h2 class="text-[13px] font-semibold uppercase tracking-wide text-muted">Рекомендации АФМ — что предпринять</h2>
+          <span class="text-[12px] text-muted">превентивные действия по выявленным трендам</span>
+          <span x-show="recsStats" x-cloak class="ml-auto flex items-center gap-3 text-[12px] text-muted">
+            <span x-show="recsStats && recsStats.top_platform">ключевая площадка
+              <span class="text-ink font-medium" x-text="recsStats ? recsStats.top_platform : ''"></span></span>
+            <span x-show="recsStats && recsStats.top_brand">бренд-лидер
+              <span class="text-ink font-medium" x-text="recsStats ? recsStats.top_brand : ''"></span></span>
+          </span>
+        </div>
+
+        <!-- error -->
+        <template x-if="recsError">
+          <div role="alert" class="rounded-soft border border-[#F3D5D5] bg-[#FDEBEC] text-[#9F2F2D] text-[12px] px-3 py-2 mb-3 flex items-start gap-2">
+            <i class="ph ph-warning-circle text-[14px] mt-px shrink-0"></i><span x-text="recsError"></span>
+          </div>
+        </template>
+
+        <!-- loading -->
+        <template x-if="recsLoading && !recommendations.length">
+          <div class="grid grid-cols-12 gap-4">
+            <template x-for="i in 3" :key="i">
+              <div class="col-span-12 md:col-span-6 xl:col-span-4 rounded-card border border-line bg-surface p-4">
+                <div class="h-4 w-32 rounded skeleton"></div>
+                <div class="h-3 w-full rounded skeleton mt-3"></div>
+                <div class="h-3 w-2/3 rounded skeleton mt-2"></div>
+                <div class="h-7 w-full rounded-soft skeleton mt-3"></div>
+              </div>
+            </template>
+          </div>
+        </template>
+
+        <!-- empty-state -->
+        <template x-if="!recsLoading && !recommendations.length && !recsError">
+          <div class="rounded-card border border-dashed border-line bg-surface p-8 text-center">
+            <i class="ph ph-lightbulb text-[26px] text-muted"></i>
+            <p class="text-[13px] text-ink mt-2 font-medium">Рекомендаций пока нет</p>
+            <p class="text-[12px] text-muted mt-1">Когда наберётся достаточно материалов, здесь появятся превентивные действия по трендам.</p>
+          </div>
+        </template>
+
+        <!-- cards -->
+        <div class="grid grid-cols-12 gap-4" x-show="recommendations.length">
+          <template x-for="(rec, i) in recommendations" :key="i">
+            <article class="reveal col-span-12 md:col-span-6 xl:col-span-4 rounded-card border border-line bg-surface shadow-diffuse p-4 flex flex-col gap-2.5">
+              <div class="flex items-start justify-between gap-3">
+                <h3 class="text-[14px] font-semibold tracking-tight leading-snug" x-text="rec.title"></h3>
+                <span class="badge-chip border shrink-0" :style="priorityBadge(rec.priority)" x-text="priorityLabel(rec.priority)"></span>
+              </div>
+              <p class="text-[12px] text-muted leading-snug" x-show="rec.rationale" x-text="rec.rationale"></p>
+              <div class="rounded-soft border border-line bg-canvas px-3 py-2 flex items-start gap-2" x-show="rec.action">
+                <i class="ph ph-arrow-bend-down-right text-[14px] text-ink mt-px shrink-0"></i>
+                <span class="text-[12px] text-ink font-medium" x-text="rec.action"></span>
+              </div>
+              <p class="text-[11px] text-muted flex items-start gap-1.5" x-show="rec.evidence">
+                <i class="ph ph-info text-[12px] mt-px shrink-0"></i><span x-text="rec.evidence"></span>
+              </p>
+            </article>
+          </template>
         </div>
       </div>
     </section>

@@ -42,6 +42,7 @@ _FEATURE_LABELS = {
     "kz_gambling_kz_lang": "Казахскоязычная лексика азартных игр",
     "kz_pyramid_tenge": "Инвестиционные обещания в тенге",
     "kz_local_bookmaker": "Кириллическое написание букмекера/HYIP-бренда",
+    "streaming_casino_brand": "Англоязычный казино-бренд/стрим-гемблинг (Stake, Roobet, bonus hunt, slots)",
     "public_figure_impersonation": "Эксплуатация имени публичной фигуры РК (ложный «эндорсмент»)",
 }
 
