@@ -98,7 +98,56 @@
     <!-- ============================================================= -->
     <!-- View 1: ЛЕНТА / ОЧЕРЕДЬ                                        -->
     <!-- ============================================================= -->
-    <section x-show="tab === 'feed'" class="grid grid-cols-12 gap-5">
+    <section x-show="tab === 'feed'" x-cloak class="space-y-5">
+
+      <!-- Telegram scanner: real network fetch of a public channel -->
+      <div class="rounded-card border border-line bg-surface shadow-diffuse p-4">
+        <div class="flex flex-wrap items-center gap-3">
+          <div class="flex items-center gap-2 shrink-0">
+            <span class="grid place-items-center w-7 h-7 rounded-soft border border-line text-ink">
+              <i class="ph ph-telegram-logo text-[16px]"></i>
+            </span>
+            <div class="leading-tight">
+              <div class="text-[13px] font-semibold tracking-tight">Сканер Telegram-каналов</div>
+              <div class="text-[11px] text-muted -mt-0.5">реальная выгрузка постов из публичного канала</div>
+            </div>
+          </div>
+          <input x-model="scanInput" @keydown.enter="scanTelegram()" :disabled="scanning"
+                 placeholder="@channel или t.me/channel · можно через запятую"
+                 class="flex-1 min-w-[220px] bg-surface border border-line rounded-soft px-3 py-2 text-[13px] outline-none focus:border-muted disabled:opacity-50" />
+          <button @click="scanTelegram()" :disabled="scanning || !scanInput.trim()"
+                  class="press inline-flex items-center gap-2 px-3.5 py-2 rounded-soft bg-ink text-white text-[13px] font-medium hover:opacity-90 disabled:opacity-40">
+            <i class="ph" :class="scanning ? 'ph-circle-notch animate-spin' : 'ph-magnifying-glass'"></i>
+            <span x-text="scanning ? 'Сканирование…' : 'Сканировать'"></span>
+          </button>
+        </div>
+
+        <template x-if="scanError">
+          <div class="rounded-soft border border-[#F3D5D5] bg-[#FDEBEC] text-[#9F2F2D] text-[12px] px-3 py-2 mt-3" x-text="scanError"></div>
+        </template>
+
+        <template x-if="scanResult">
+          <div class="mt-3 rounded-soft border border-line bg-canvas px-3 py-2.5 text-[12px]">
+            <div class="text-ink">
+              Добавлено <span class="font-mono font-medium" x-text="scanResult.added"></span>
+              · флагнуто <span class="font-mono font-medium text-[#9F2F2D]" x-text="scanResult.flagged"></span>
+            </div>
+            <div class="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-muted" x-show="scanResult.channels && scanResult.channels.length">
+              <template x-for="c in scanResult.channels" :key="c.channel">
+                <span class="inline-flex items-center gap-1.5">
+                  <i class="ph ph-telegram-logo text-[13px]"></i>
+                  <span class="font-mono text-ink" x-text="c.channel"></span>
+                  <span>·&nbsp;получено <span class="font-mono" x-text="c.fetched"></span></span>
+                  <span>·&nbsp;добавлено <span class="font-mono" x-text="c.added"></span></span>
+                  <span>·&nbsp;флаг <span class="font-mono" x-text="c.flagged"></span></span>
+                </span>
+              </template>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <div class="grid grid-cols-12 gap-5">
 
       <!-- Left: priority queue -->
       <div class="col-span-12 lg:col-span-5 xl:col-span-4">
@@ -306,6 +355,7 @@
           </template>
         </div>
       </div>
+      </div><!-- /inner grid -->
     </section>
 
     <!-- ============================================================= -->
@@ -389,13 +439,90 @@
     </section>
 
     <!-- ============================================================= -->
-    <!-- View 4: ЖИВАЯ ПРОВЕРКА                                         -->
+    <!-- View 4: МОНИТОРИНГ / WATCHLIST                                 -->
+    <!-- ============================================================= -->
+    <section x-show="tab === 'watch'" x-cloak class="grid grid-cols-12 gap-5">
+      <div class="col-span-12 lg:col-span-6 xl:col-span-5">
+        <div class="rounded-card border border-line bg-surface shadow-diffuse p-6">
+          <h2 class="text-[15px] font-semibold tracking-tight">Непрерывный мониторинг</h2>
+          <p class="text-[12px] text-muted mt-1">Каналы из этого списка периодически сканируются в фоне — новые посты автоматически попадают в очередь и оцениваются моделью.</p>
+
+          <label class="section-h mt-5 block">Добавить канал</label>
+          <div class="flex gap-2">
+            <input x-model="watchInput" @keydown.enter="addWatch()" :disabled="watchAdding"
+                   placeholder="@channel или t.me/channel"
+                   class="flex-1 bg-surface border border-line rounded-soft px-3 py-2 text-[13px] outline-none focus:border-muted disabled:opacity-50" />
+            <button @click="addWatch()" :disabled="watchAdding || !watchInput.trim()"
+                    class="press inline-flex items-center gap-2 px-3.5 py-2 rounded-soft bg-ink text-white text-[13px] font-medium hover:opacity-90 disabled:opacity-40">
+              <i class="ph" :class="watchAdding ? 'ph-circle-notch animate-spin' : 'ph-plus'"></i>
+              <span>Добавить</span>
+            </button>
+          </div>
+
+          <button @click="scanWatchlist()" :disabled="watchScanning || !watchlist.length"
+                  class="press w-full mt-4 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-soft border border-line bg-canvas text-ink text-[13px] font-medium hover:bg-line/40 disabled:opacity-40">
+            <i class="ph" :class="watchScanning ? 'ph-circle-notch animate-spin' : 'ph-arrows-clockwise'"></i>
+            <span x-text="watchScanning ? 'Сканирование списка…' : 'Сканировать список сейчас'"></span>
+          </button>
+
+          <template x-if="watchError">
+            <div class="rounded-soft border border-[#F3D5D5] bg-[#FDEBEC] text-[#9F2F2D] text-[12px] px-3 py-2 mt-3" x-text="watchError"></div>
+          </template>
+
+          <template x-if="watchScanResult">
+            <div class="mt-3 rounded-soft border border-line bg-canvas px-3 py-2.5 text-[12px] text-ink">
+              Добавлено <span class="font-mono font-medium" x-text="watchScanResult.added"></span>
+              · флагнуто <span class="font-mono font-medium text-[#9F2F2D]" x-text="watchScanResult.flagged"></span>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- channels list -->
+      <div class="col-span-12 lg:col-span-6 xl:col-span-7">
+        <div class="rounded-card border border-line bg-surface shadow-diffuse p-6 min-h-[260px]">
+          <h3 class="section-h">Каналы под наблюдением <span class="font-mono text-muted normal-case" x-text="'(' + watchlist.length + ')'"></span></h3>
+
+          <template x-if="watchLoading && !watchlist.length">
+            <div class="space-y-2 mt-2">
+              <template x-for="i in 3" :key="i">
+                <div class="h-9 w-full rounded-soft skeleton"></div>
+              </template>
+            </div>
+          </template>
+
+          <template x-if="!watchLoading && !watchlist.length && !watchError">
+            <div class="rounded-card border border-dashed border-line bg-canvas p-8 text-center mt-1">
+              <i class="ph ph-binoculars text-[24px] text-muted"></i>
+              <p class="text-[13px] text-ink mt-2 font-medium">Список пуст</p>
+              <p class="text-[12px] text-muted mt-1">Добавьте Telegram-канал слева, чтобы начать непрерывное наблюдение.</p>
+            </div>
+          </template>
+
+          <ul class="space-y-2 mt-1" x-show="watchlist.length">
+            <template x-for="ch in watchlist" :key="ch">
+              <li class="flex items-center gap-3 rounded-soft border border-line bg-canvas px-3 py-2">
+                <i class="ph ph-telegram-logo text-[15px] text-muted shrink-0"></i>
+                <span class="font-mono text-[13px] text-ink truncate" x-text="ch"></span>
+                <button @click="removeWatch(ch)" title="Убрать из наблюдения"
+                        class="press ml-auto grid place-items-center w-6 h-6 rounded-soft text-muted hover:text-[#9F2F2D] hover:bg-[#FDEBEC] shrink-0">
+                  <i class="ph ph-x text-[14px]"></i>
+                </button>
+              </li>
+            </template>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================= -->
+    <!-- View 5: ЖИВАЯ ПРОВЕРКА                                         -->
     <!-- ============================================================= -->
     <section x-show="tab === 'live'" x-cloak class="grid grid-cols-12 gap-5">
       <div class="col-span-12 lg:col-span-5">
         <div class="rounded-card border border-line bg-surface shadow-diffuse p-6">
           <h2 class="text-[15px] font-semibold tracking-tight">Живая проверка</h2>
-          <p class="text-[12px] text-muted mt-1">Вставьте ссылку на пост или загрузите видео — модель оценит риск локально, без внешних сервисов.</p>
+          <p class="text-[12px] text-muted mt-1">Вставьте ссылку (TikTok / YouTube / Instagram / Telegram) или загрузите видео — модель разберёт его по всем модальностям и оценит риск локально, без внешних сервисов.</p>
 
           <label class="section-h mt-5 block">Ссылка на пост</label>
           <div class="flex gap-2">
@@ -437,10 +564,18 @@
           </div>
         </template>
         <template x-if="liveLoading">
-          <div class="rounded-card border border-line bg-surface p-6 space-y-4">
-            <div class="h-16 w-32 skeleton rounded-card"></div>
-            <div class="h-3 w-full skeleton rounded"></div>
-            <div class="h-3 w-2/3 skeleton rounded"></div>
+          <div class="rounded-card border border-line bg-surface shadow-diffuse p-6 space-y-4">
+            <div class="flex items-center gap-2.5 text-[13px]">
+              <i class="ph ph-circle-notch animate-spin text-[18px] text-ink"></i>
+              <span class="font-medium">Анализ видео</span>
+              <span class="ml-auto font-mono text-[13px] text-muted" x-text="liveProgress + '%'"></span>
+            </div>
+            <div class="text-[12px] text-muted">Этап: <span class="text-ink" x-text="liveStage || 'инициализация'"></span></div>
+            <div class="h-2 w-full rounded-full bg-canvas overflow-hidden border border-line">
+              <div class="h-full rounded-full bg-ink transition-[width] duration-500 ease-out"
+                   :style="'width:' + Math.max(4, Math.min(100, liveProgress)) + '%'"></div>
+            </div>
+            <p class="text-[11px] text-muted">Реальный мультимодальный разбор: получение медиа → аудио→текст → текст с экрана (OCR) → визуальные маркеры → скоринг собственной моделью.</p>
           </div>
         </template>
         <template x-if="liveResult && !liveLoading">
@@ -456,6 +591,9 @@
                   <i :class="'ph ' + platformIcon(liveResult.post.platform) + ' text-[14px]'"></i>
                   <span x-text="liveResult.post.platform"></span>
                 </div>
+                <a x-show="liveResult.post.url" :href="liveResult.post.url" target="_blank" rel="noopener"
+                   class="text-[12px] text-muted hover:text-ink underline decoration-line underline-offset-2 break-all mt-0.5 inline-block"
+                   x-text="liveResult.post.url"></a>
               </div>
               <div class="shrink-0 text-right">
                 <div class="font-mono text-[30px] leading-none font-medium px-3 py-2 rounded-card inline-block" :style="riskBadge(liveResult.score.risk)" x-text="liveResult.score.risk"></div>
@@ -464,6 +602,32 @@
             </div>
 
             <div x-show="liveResult.note" class="rounded-soft border border-[#F0E4BE] bg-[#FBF3DB] text-[#956400] text-[12px] px-3 py-2" x-text="liveResult.note"></div>
+
+            <!-- multimodal evidence: proves real video analysis -->
+            <div class="grid md:grid-cols-2 gap-5">
+              <div>
+                <h3 class="section-h">Транскрипт (аудио→текст)</h3>
+                <p class="evidence" x-text="liveResult.extracted && liveResult.extracted.transcript ? liveResult.extracted.transcript : 'нет аудио-дорожки'"
+                   :class="liveResult.extracted && liveResult.extracted.transcript ? '' : 'text-muted'"></p>
+              </div>
+              <div>
+                <h3 class="section-h">Текст с экрана (OCR)</h3>
+                <p class="evidence" x-text="liveResult.extracted && liveResult.extracted.ocr_text ? liveResult.extracted.ocr_text : 'текст на кадрах не распознан'"
+                   :class="liveResult.extracted && liveResult.extracted.ocr_text ? '' : 'text-muted'"></p>
+              </div>
+            </div>
+
+            <div x-show="liveResult.extracted && liveResult.extracted.visual_concepts && liveResult.extracted.visual_concepts.length">
+              <h3 class="section-h">Визуальные концепты</h3>
+              <div class="flex flex-wrap gap-1.5">
+                <template x-for="vc in (liveResult.extracted ? liveResult.extracted.visual_concepts : [])" :key="vc.label">
+                  <span class="badge-chip bg-canvas text-ink border border-line normal-case tracking-normal">
+                    <span x-text="vc.label"></span>
+                    <span class="font-mono text-muted ml-1" x-text="Math.round((vc.score||0)*100) + '%'"></span>
+                  </span>
+                </template>
+              </div>
+            </div>
 
             <div x-show="liveResult.score.top_features && liveResult.score.top_features.length">
               <h3 class="section-h">Сработавшие паттерны</h3>

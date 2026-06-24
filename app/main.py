@@ -56,6 +56,39 @@ def _maybe_seed(conn) -> None:
         print(f"[seed] skipped: {e}")
 
 
+# Периодический реальный сбор по watchlist (непрерывный мониторинг).
+WATCHLIST_SCAN_INTERVAL_SEC = 600
+
+
+def _scan_watchlist_once() -> None:
+    """Один проход скана watchlist в отдельном потоке (СВОЁ соединение к БД)."""
+    try:
+        from app.watchlist.service import scan_watchlist
+
+        wconn = db.connect()
+        try:
+            res = scan_watchlist(wconn)
+            if res.get("added"):
+                print(f"[watchlist] +{res['added']} постов, флагнуто {res.get('flagged', 0)}")
+        finally:
+            wconn.close()
+    except Exception as e:
+        print(f"[watchlist] step error: {e}")
+
+
+async def _watchlist_loop() -> None:
+    """Периодически сканирует watchlist-каналы (реальный сбор). Сетевой/CPU-разбор
+    выносим в executor, чтобы не блокировать event-loop. Безопасен к отмене."""
+    while True:
+        try:
+            await asyncio.sleep(WATCHLIST_SCAN_INTERVAL_SEC)
+            await asyncio.get_event_loop().run_in_executor(None, _scan_watchlist_once)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"[watchlist] loop error: {e}")
+
+
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     conn = db.connect()
@@ -68,14 +101,18 @@ async def lifespan(application: FastAPI):
     _maybe_seed(conn)
     ticker = asyncio.create_task(_ticker_loop(application))
     application.state.ticker = ticker
+    watchlist_task = asyncio.create_task(_watchlist_loop())
+    application.state.watchlist_task = watchlist_task
     try:
         yield
     finally:
-        ticker.cancel()
-        try:
-            await ticker
-        except asyncio.CancelledError:
-            pass
+        for t in (ticker, watchlist_task):
+            t.cancel()
+        for t in (ticker, watchlist_task):
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
         conn.close()
 
 

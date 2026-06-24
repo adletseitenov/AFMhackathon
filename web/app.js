@@ -98,6 +98,7 @@ function kozApp() {
       { id: "feed", label: "Лента", icon: "ph-queue" },
       { id: "graph", label: "Граф", icon: "ph-graph" },
       { id: "trends", label: "Тренды", icon: "ph-chart-bar" },
+      { id: "watch", label: "Мониторинг", icon: "ph-binoculars" },
       { id: "live", label: "Живая проверка", icon: "ph-shield-check" },
     ],
 
@@ -113,6 +114,21 @@ function kozApp() {
     _knownIds: new Set(),
     _newIds: new Set(),
     _pollTimer: null,
+
+    // --- telegram scanner (Лента) ---
+    scanInput: "",
+    scanning: false,
+    scanError: "",
+    scanResult: null, // {added, flagged, channels:[{channel,fetched,added,flagged}]}
+
+    // --- watchlist (Мониторинг) ---
+    watchlist: [],
+    watchLoading: false,
+    watchError: "",
+    watchInput: "",
+    watchAdding: false,
+    watchScanning: false,
+    watchScanResult: null,
 
     // --- drill-down ---
     detail: null,
@@ -131,12 +147,16 @@ function kozApp() {
     _charts: {},
     _trendsLoaded: false,
 
-    // --- live check ---
+    // --- live check (async job: POST /api/analyze -> {job_id}; poll /api/jobs/{id}) ---
     liveUrl: "",
     liveFile: null,
     liveResult: null,
     liveLoading: false,
     liveError: "",
+    liveStage: "",        // RU stage string from the running job
+    liveProgress: 0,      // 0..100
+    _jobId: null,
+    _jobTimer: null,
 
     // ===================================================== lifecycle
     init() {
@@ -151,6 +171,7 @@ function kozApp() {
       this.tab = id;
       if (id === "graph") this.$nextTick(() => this.loadGraph(true));
       if (id === "trends") this.$nextTick(() => this.loadTrends());
+      if (id === "watch") this.loadWatchlist();
     },
 
     // ===================================================== top bar
@@ -426,16 +447,24 @@ function kozApp() {
       return Math.round((count / max) * 100);
     },
 
-    // ===================================================== live check
+    // ===================================================== live check (async)
+    //
+    // /api/analyze is asynchronous: POST returns {job_id, status:"queued"}.
+    // We then poll GET /api/jobs/{job_id} every ~700ms reading
+    // {status, stage, progress, result, error} until status is 'done' or 'error'.
+    // While running we surface the RU `stage` text + `progress` percent in a bar.
     async analyze() {
       if (this.liveLoading) return;
       if (!this.liveUrl && !this.liveFile) {
         this.liveError = "Вставьте ссылку или выберите файл.";
         return;
       }
+      this._stopJobPoll();
       this.liveLoading = true;
       this.liveError = "";
       this.liveResult = null;
+      this.liveStage = "постановка в очередь";
+      this.liveProgress = 0;
       try {
         let r;
         if (this.liveFile) {
@@ -454,12 +483,168 @@ function kozApp() {
           try { const j = await r.json(); if (j.detail) msg = j.detail; } catch (_) {}
           throw new Error(msg);
         }
-        this.liveResult = await r.json();
-        this.$nextTick(() => observeReveals());
+        const start = await r.json();
+        if (!start.job_id) {
+          // Backend may still answer synchronously with a verdict — accept it.
+          if (start.score) {
+            this.liveResult = start;
+            this.liveLoading = false;
+            this.$nextTick(() => observeReveals());
+            return;
+          }
+          throw new Error("сервер не вернул идентификатор задачи");
+        }
+        this._jobId = start.job_id;
+        this._pollJob();
       } catch (e) {
         this.liveError = "Проверка не удалась: " + e.message;
-      } finally {
         this.liveLoading = false;
+      }
+    },
+
+    // Poll the job until terminal; ~700ms cadence.
+    _pollJob() {
+      this._jobTimer = setInterval(async () => {
+        if (!this._jobId) return;
+        try {
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this._jobId));
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          const job = await r.json();
+          this.liveStage = job.stage || this.liveStage || "обработка";
+          if (typeof job.progress === "number") this.liveProgress = job.progress;
+
+          if (job.status === "done") {
+            this._stopJobPoll();
+            if (job.result && job.result.score) {
+              this.liveResult = job.result;
+            } else {
+              this.liveError = "Анализ завершён, но результат пуст.";
+            }
+            this.liveLoading = false;
+            this.$nextTick(() => observeReveals());
+          } else if (job.status === "error") {
+            this._stopJobPoll();
+            this.liveError = "Анализ не удался: " + (job.error || "неизвестная ошибка");
+            this.liveLoading = false;
+          }
+        } catch (e) {
+          // transient fetch failure: surface but keep the run alive for a retry tick
+          this.liveError = "Потеряна связь с задачей: " + e.message;
+        }
+      }, 700);
+    },
+
+    _stopJobPoll() {
+      if (this._jobTimer) { clearInterval(this._jobTimer); this._jobTimer = null; }
+      this._jobId = null;
+    },
+
+    // ===================================================== telegram scanner
+    // POST /api/scan/telegram {channels:[...]} (comma-separated input -> array).
+    // Response {added, flagged, channels:[{channel,fetched,added,flagged}]}.
+    async scanTelegram() {
+      if (this.scanning) return;
+      const channels = this.scanInput
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (!channels.length) {
+        this.scanError = "Укажите канал, например @durov или t.me/durov.";
+        return;
+      }
+      this.scanning = true;
+      this.scanError = "";
+      this.scanResult = null;
+      try {
+        const r = await fetch("/api/scan/telegram", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ channels }),
+        });
+        if (!r.ok) {
+          let msg = "HTTP " + r.status;
+          try { const j = await r.json(); if (j.detail) msg = j.detail; } catch (_) {}
+          throw new Error(msg);
+        }
+        this.scanResult = await r.json();
+        await this.loadFeed(); // feed now contains the real scanned posts
+      } catch (e) {
+        this.scanError = "Сканирование не удалось: " + e.message;
+      } finally {
+        this.scanning = false;
+      }
+    },
+
+    // ===================================================== watchlist
+    async loadWatchlist() {
+      this.watchLoading = true;
+      this.watchError = "";
+      try {
+        const r = await fetch("/api/watchlist");
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const data = await r.json();
+        this.watchlist = (data && data.channels) || [];
+      } catch (e) {
+        this.watchError = "Не удалось загрузить список наблюдения: " + e.message;
+      } finally {
+        this.watchLoading = false;
+      }
+    },
+
+    async addWatch() {
+      const channel = (this.watchInput || "").trim();
+      if (!channel) {
+        this.watchError = "Укажите канал для добавления.";
+        return;
+      }
+      if (this.watchAdding) return;
+      this.watchAdding = true;
+      this.watchError = "";
+      try {
+        const r = await fetch("/api/watchlist", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ channel }),
+        });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const data = await r.json();
+        this.watchlist = (data && data.channels) || [];
+        this.watchInput = "";
+      } catch (e) {
+        this.watchError = "Не удалось добавить канал: " + e.message;
+      } finally {
+        this.watchAdding = false;
+      }
+    },
+
+    async removeWatch(channel) {
+      this.watchError = "";
+      try {
+        const r = await fetch("/api/watchlist/" + encodeURIComponent(channel), {
+          method: "DELETE",
+        });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const data = await r.json();
+        this.watchlist = (data && data.channels) || [];
+      } catch (e) {
+        this.watchError = "Не удалось удалить канал: " + e.message;
+      }
+    },
+
+    async scanWatchlist() {
+      if (this.watchScanning) return;
+      this.watchScanning = true;
+      this.watchError = "";
+      this.watchScanResult = null;
+      try {
+        const r = await fetch("/api/watchlist/scan", { method: "POST" });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        this.watchScanResult = await r.json();
+        await this.loadFeed(); // surface freshly scanned posts in the queue
+      } catch (e) {
+        this.watchError = "Сканирование списка не удалось: " + e.message;
+      } finally {
+        this.watchScanning = false;
       }
     },
 

@@ -47,6 +47,7 @@ REQUIRED_ENDPOINTS: list[tuple[str, str]] = [
     ("GET", "/api/trends"),
     ("GET", "/api/report/{id}.pdf"),
     ("POST", "/api/analyze"),
+    ("GET", "/api/watchlist"),
 ]
 
 
