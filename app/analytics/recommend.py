@@ -26,6 +26,11 @@ from collections import Counter
 
 from app import config, db
 from app.analytics.trends import BRAND_ENTITY_TYPES, aggregate
+from app.decision.licensed import (
+    COMPLIANCE_HINT,
+    is_licensed,
+    licensed_operators,
+)
 
 # --- Пороги правил (детерминированы, без магии по месту) ----------------------
 # Доминирующий бренд: >= N постов с одним брендом -> high.
@@ -87,24 +92,48 @@ def _build(conn: sqlite3.Connection) -> list[dict]:
 
     recs: list[dict] = []
 
-    # --- Правило 1: доминирующий бренд (high) ---------------------------------
+    # --- Правило 1: доминирующий бренд ----------------------------------------
+    # ЛИЦЕНЗИРОВАННЫЙ оператор (Olimpbet/PARI/Tennisi/...) работает в РК ЛЕГАЛЬНО:
+    # блокировка не требуется — проверяем РЕКЛАМНЫЕ нормы (medium). Нелицензированный
+    # бренд (mostbet/1win/1xbet/...) — прежняя жёсткая рекомендация (high): блокировка
+    # платёжных каналов / takedown. Риск-скор контента при этом не занижается.
     if top_brands:
         top = top_brands[0]
         if top["count"] >= DOMINANT_BRAND_MIN:
-            recs.append({
-                "title": f"Доминирующий бренд: {top['brand']}",
-                "rationale": (
-                    f"Бренд «{top['brand']}» фигурирует в {top['count']} постах — "
-                    "это устойчивый рекламный канал нелегальной площадки, а не "
-                    "разовое упоминание."
-                ),
-                "action": (
-                    f"Запросить блокировку платёжных каналов и takedown аккаунтов "
-                    f"бренда «{top['brand']}»; направить материалы провайдерам/банкам."
-                ),
-                "priority": "high",
-                "evidence": f"{top['brand']}: {top['count']} постов",
-            })
+            if is_licensed(top["brand"]):
+                recs.append({
+                    "title": f"Лицензированный оператор: {top['brand']}",
+                    "rationale": (
+                        f"Бренд «{top['brand']}» фигурирует в {top['count']} постах "
+                        "и относится к ЛИЦЕНЗИРОВАННЫМ в РК букмекерам — деятельность "
+                        "оператора легальна, блокировка не требуется. Контроль — за "
+                        "соблюдением рекламных норм (контент остаётся гемблингом)."
+                    ),
+                    "action": (
+                        f"Не блокировать оператора «{top['brand']}». {COMPLIANCE_HINT} "
+                        "При нарушениях рекламы — предписание оператору/площадке."
+                    ),
+                    "priority": "medium",
+                    "evidence": (
+                        f"{top['brand']}: {top['count']} постов; лицензирован в РК "
+                        "(сверять с реестром АФМ/ЕУЦ)"
+                    ),
+                })
+            else:
+                recs.append({
+                    "title": f"Доминирующий бренд: {top['brand']}",
+                    "rationale": (
+                        f"Бренд «{top['brand']}» фигурирует в {top['count']} постах — "
+                        "это устойчивый рекламный канал нелегальной площадки, а не "
+                        "разовое упоминание."
+                    ),
+                    "action": (
+                        f"Запросить блокировку платёжных каналов и takedown аккаунтов "
+                        f"бренда «{top['brand']}»; направить материалы провайдерам/банкам."
+                    ),
+                    "priority": "high",
+                    "evidence": f"{top['brand']}: {top['count']} постов",
+                })
 
     # --- Правило 2: площадка-лидер по эскалациям ------------------------------
     plat_esc = _platform_escalation_shares(conn)
@@ -227,6 +256,44 @@ def _build(conn: sqlite3.Connection) -> list[dict]:
                 ),
                 "priority": "low",
                 "evidence": f"{top_cat}: {top_cat_n}/{flagged} ({round(share * 100)}%)",
+            })
+
+    # --- Правило 8: разделение легальных и нелегальных операторов (обзор) ------
+    # Если среди топ-брендов есть И лицензированные, И нелицензированные —
+    # подсветить аналитику: блокировки фокусировать на нелегальных, по легальным —
+    # контроль рекламы. Срабатывает только когда есть что разделять (есть оба класса).
+    if top_brands:
+        # licensed_operators(brand) непусто <=> бренд лицензирован (спец. задачи).
+        licensed_brands = [
+            b["brand"] for b in top_brands if licensed_operators(b["brand"])
+        ]
+        unlicensed_brands = [
+            b["brand"] for b in top_brands if not licensed_operators(b["brand"])
+        ]
+        if licensed_brands and unlicensed_brands:
+            n_lic = len(licensed_brands)
+            n_unlic = len(unlicensed_brands)
+            n_total = n_lic + n_unlic
+            unlic_share = n_unlic / n_total
+            recs.append({
+                "title": "Разделение легальных и нелегальных операторов",
+                "rationale": (
+                    f"Среди топ-брендов {n_lic} из {n_total} лицензированы в РК "
+                    f"({', '.join(licensed_brands)}), {n_unlic} — нелицензированы "
+                    f"({', '.join(unlicensed_brands)}). Это разные режимы реагирования: "
+                    "по нелегальным — блокировка, по легальным — контроль рекламы."
+                ),
+                "action": (
+                    "Сфокусировать блокировки платёжных каналов и takedown на "
+                    "нелицензированных операторах; по лицензированным — контроль "
+                    "соблюдения рекламных норм (возраст 21+, пометка «реклама», "
+                    "запрет «гарантированного дохода» и агрессивных бонусов)."
+                ),
+                "priority": "high" if unlic_share >= 0.5 else "medium",
+                "evidence": (
+                    f"лицензированы: {n_lic} ({', '.join(licensed_brands)}); "
+                    f"нелицензированы: {n_unlic} ({', '.join(unlicensed_brands)})"
+                ),
             })
 
     # --- Дефолт: данных мало / ничего не сработало -----------------------------

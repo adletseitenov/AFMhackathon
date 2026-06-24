@@ -36,6 +36,11 @@ import app.ingestion.fetch as fetch_mod
 import app.jobs.worker as jobs
 from app import config, db
 from app.decision.explain import explain
+from app.decision.licensed import (
+    COMPLIANCE_HINT,
+    REGISTRY_DISCLAIMER,
+    licensed_operators,
+)
 from app.models import Extracted, FeatureHit, Post, Score
 
 router = APIRouter()
@@ -45,12 +50,28 @@ router = APIRouter()
 # Сериализация строк БД в форму контракта (§0.7).
 # --------------------------------------------------------------------------- #
 
-def _post_dict(r) -> dict:
+def _post_dict(r, licensed_text: "str | None" = None) -> dict:
+    """Сериализует строку поста в форму контракта.
+
+    Флаг «разрешён в РК»: licensed_operators — канонические имена ЛИЦЕНЗИРОВАННЫХ
+    в РК букмекеров, упомянутых в тексте поста; licensed = bool(этого списка).
+    По умолчанию матчим по caption (его достаточно для ленты); для drill-down
+    передаём полный текст (combined_text) через licensed_text. Риск НЕ занижается —
+    флаг лишь добавляет контекст для решения человека.
+    """
+    # Матчим и по подписи, И по author_handle: у tiktok/стрим-постов оператор —
+    # это сам аккаунт (@olimpbet), а подпись может быть посторонней («#radmir»).
+    if licensed_text is not None:
+        text = licensed_text
+    else:
+        text = (r["caption"] or "") + " " + (r["author_handle"] or "")
+    ops = licensed_operators(text)
     return {
         "id": r["id"], "platform": r["platform"], "author_handle": r["author_handle"],
         "url": r["url"], "caption": r["caption"], "posted_at": r["posted_at"],
         "media_path": r["media_path"], "thumb_url": r["thumb_url"], "source": r["source"],
         "view_count": r["view_count"],
+        "licensed_operators": ops, "licensed": bool(ops),
     }
 
 
@@ -151,12 +172,29 @@ def api_post_detail(request: Request, post_id: str):
             ],
         )
 
+    # Флаг «разрешён в РК»: матчим по ПОЛНОМУ тексту (combined_text, иначе склейка
+    # caption+transcript+ocr_text), чтобы поймать оператора в речи/на кадре, а не
+    # только в подписи. Риск/score/recommended_action НЕ меняем.
+    if e is not None:
+        licensed_text = e.combined_text or " ".join(
+            x for x in (e.caption or "", e.transcript or "", e.ocr_text or "") if x
+        )
+    else:
+        licensed_text = p["caption"] or ""
+    # + author_handle: оператор может быть самим аккаунтом (@olimpbet/@parimatch).
+    licensed_text = (licensed_text or "") + " " + (p["author_handle"] or "")
+    post_dict = _post_dict(p, licensed_text=licensed_text)
+    is_licensed = post_dict["licensed"]
+
     return {
-        "post": _post_dict(p),
+        "post": post_dict,
         "extracted": asdict(e) if e is not None else None,
         "score": asdict(score) if score is not None else None,
         "explanation": explain(score, entities, e) if score is not None else [],
         "recommended_action": s["recommended_action"] if s is not None else None,
+        # Подсказка по рекламным нормам + дисклеймер реестра — только когда лицензирован.
+        "licensed_note": COMPLIANCE_HINT if is_licensed else "",
+        "licensed_disclaimer": REGISTRY_DISCLAIMER if is_licensed else "",
     }
 
 

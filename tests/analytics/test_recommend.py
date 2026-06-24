@@ -219,6 +219,140 @@ def test_high_risk_share_rule_fires(conn):
     assert hr_recs, "ожидалась рекомендация про высокую долю high-risk в очереди"
 
 
+# --- Задача (лицензия): доминирующий бренд — ЛИЦЕНЗИРОВАННЫЙ оператор -----------
+def test_dominant_brand_licensed_operator_recommends_compliance_not_block(conn):
+    """Если топ-бренд — лицензированный в РК букмекер (Olimpbet), рекомендация
+    НЕ про блокировку/takedown, а про проверку рекламных норм (priority=medium)."""
+    brand = "Olimpbet"
+    for i in range(6):
+        pid = f"ob{i}"
+        _seed_post(conn, pid, "tiktok")
+        _seed_score(conn, pid, 88, "gambling", "escalate")
+        _seed_extracted(conn, pid, [
+            {"type": "betting_brand", "value": "Olimpbet", "normalized": brand},
+        ])
+    conn.commit()
+
+    recs = build_recommendations(conn)
+    _assert_well_formed(recs)
+
+    # Рекомендация про этот бренд должна существовать.
+    brand_recs = [
+        r for r in recs
+        if "olimpbet" in (r["title"] + r["rationale"] + r["action"]).lower()
+    ]
+    assert brand_recs, "ожидалась рекомендация по доминирующему бренду Olimpbet"
+    rec = brand_recs[0]
+
+    # Лицензированный оператор: НЕ предписываем блокировку платёжных каналов /
+    # takedown — рекомендуем проверку рекламных норм (medium).
+    text = (rec["title"] + rec["rationale"] + rec["action"]).lower()
+    a = rec["action"].lower()
+    assert "блокировку платёжных каналов" not in a, \
+        "лицензированный оператор — не предписываем блокировку платёжных каналов"
+    assert "takedown" not in a, "лицензированный оператор — без takedown"
+    assert rec["priority"] == "medium"
+    assert "рекламн" in text or "21+" in text or "реклам" in text, \
+        "ожидалась проверка рекламных норм у лицензированного оператора"
+
+
+def test_dominant_brand_unlicensed_keeps_hard_block_high(conn):
+    """Нелицензированный топ-бренд (mostbet) — прежняя жёсткая рекомендация:
+    блокировка платёжных каналов / takedown, priority=high."""
+    brand = "mostbet"
+    for i in range(6):
+        pid = f"mb{i}"
+        _seed_post(conn, pid, "tiktok")
+        _seed_score(conn, pid, 92, "gambling", "escalate")
+        _seed_extracted(conn, pid, [
+            {"type": "betting_brand", "value": "Mostbet", "normalized": brand},
+        ])
+    conn.commit()
+
+    recs = build_recommendations(conn)
+    _assert_well_formed(recs)
+
+    brand_recs = [
+        r for r in recs
+        if brand in (r["title"] + r["rationale"] + r["action"]).lower()
+        and r["priority"] == "high"
+    ]
+    assert brand_recs, "ожидалась high-рекомендация по нелицензированному бренду"
+    a = brand_recs[0]["action"].lower()
+    assert "блокир" in a or "takedown" in a, \
+        "для нелицензированного бренда — жёсткая блокировка/takedown"
+
+
+def test_dominant_brand_unlicensed_1win_keeps_hard_block_high(conn):
+    """1win — нелицензированный: остаётся жёсткая рекомендация про блокировку."""
+    brand = "1win"
+    for i in range(5):
+        pid = f"w{i}"
+        _seed_post(conn, pid, "instagram")
+        _seed_score(conn, pid, 90, "gambling", "escalate")
+        _seed_extracted(conn, pid, [
+            {"type": "betting_brand", "value": "1Win", "normalized": brand},
+        ])
+    conn.commit()
+
+    recs = build_recommendations(conn)
+    _assert_well_formed(recs)
+    brand_recs = [
+        r for r in recs
+        if brand in (r["title"] + r["rationale"] + r["action"]).lower()
+        and r["priority"] == "high"
+    ]
+    assert brand_recs, "ожидалась high-рекомендация про блокировку 1win"
+    a = brand_recs[0]["action"].lower()
+    assert "блокир" in a or "takedown" in a
+
+
+def test_mixed_licensed_and_unlicensed_overview_recommendation(conn):
+    """Если среди top_brands есть и лицензированные, и нелицензированные —
+    появляется обзорная рекомендация про разделение легальных и нелегальных."""
+    # нелицензированные (доминируют), плюс лицензированный
+    for i in range(6):
+        pid = f"u{i}"
+        _seed_post(conn, pid, "tiktok")
+        _seed_score(conn, pid, 92, "gambling", "escalate")
+        _seed_extracted(conn, pid, [
+            {"type": "betting_brand", "value": "Mostbet", "normalized": "mostbet"},
+        ])
+    for i in range(3):
+        pid = f"l{i}"
+        _seed_post(conn, pid, "telegram")
+        _seed_score(conn, pid, 80, "gambling", "escalate")
+        _seed_extracted(conn, pid, [
+            {"type": "betting_brand", "value": "Olimpbet", "normalized": "Olimpbet"},
+        ])
+    conn.commit()
+
+    recs = build_recommendations(conn)
+    _assert_well_formed(recs)
+    overview = [r for r in recs if "разделение" in r["title"].lower()]
+    assert overview, "ожидалась обзорная рекомендация про разделение операторов"
+    rat = overview[0]["rationale"].lower()
+    assert "лиценз" in rat, "rationale должен ссылаться на лицензирование"
+
+
+def test_only_unlicensed_no_split_overview(conn):
+    """Если все top_brands нелицензированные — обзорной рекомендации про
+    разделение легальных/нелегальных НЕТ (нечего разделять)."""
+    for i in range(6):
+        pid = f"o{i}"
+        _seed_post(conn, pid, "tiktok")
+        _seed_score(conn, pid, 92, "gambling", "escalate")
+        _seed_extracted(conn, pid, [
+            {"type": "betting_brand", "value": "Mostbet", "normalized": "mostbet"},
+        ])
+    conn.commit()
+
+    recs = build_recommendations(conn)
+    _assert_well_formed(recs)
+    overview = [r for r in recs if "разделение" in r["title"].lower()]
+    assert not overview, "без лицензированных брендов разделять нечего"
+
+
 # --- Устойчивость: битый entities_json не роняет движок ------------------------
 def test_malformed_entities_do_not_crash(conn):
     _seed_post(conn, "p1", "tiktok")

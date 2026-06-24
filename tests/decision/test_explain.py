@@ -6,7 +6,7 @@ crypto_iban, urgency, money_emoji, visual_gambling.
 """
 
 from app.decision.explain import explain
-from app.models import Entity, FeatureHit, Score
+from app.models import Entity, Extracted, FeatureHit, Score
 
 
 def test_high_risk_yields_at_least_two_russian_bullets():
@@ -236,3 +236,62 @@ def test_entity_only_explanation_when_no_features():
     assert "mostbet" in joined
     assert "WIN777" in joined
     assert len(bullets) == 2
+
+
+# --- Флаг «разрешён в РК» (лицензированный букмекер) ---------------------- #
+
+
+def _extracted_with(text: str) -> Extracted:
+    return Extracted(
+        post_id="lic", caption=text, transcript="", ocr_text="",
+        visual_concepts=[], combined_text=text, entities=[],
+    )
+
+
+def test_licensed_operator_adds_allowed_bullet_first():
+    """Лицензированный букмекер в тексте -> первый буллет «✓ Разрешён в РК»."""
+    score = Score(
+        post_id="lic1", risk=82, category="gambling",
+        class_probs={"gambling": 0.9, "pyramid": 0.04, "fraud": 0.03, "clean": 0.03},
+        top_features=[
+            FeatureHit(feature="casino_betting_brand", weight=0.7, evidence="Olimpbet"),
+        ],
+    )
+    extracted = _extracted_with("Ставки на Olimpbet, заходи и выигрывай")
+    bullets = explain(score, [], extracted)
+    assert len(bullets) >= 2
+    # информативный флаг идёт ПЕРВЫМ
+    assert bullets[0].startswith("✓ Разрешён в РК")
+    assert "Olimpbet" in bullets[0]
+    assert "блокировка не требуется" in bullets[0].lower()
+    # риск-сигналы по-прежнему присутствуют (риск не занижаем)
+    joined = " ".join(bullets[1:])
+    assert "Olimpbet" in joined
+
+
+def test_unlicensed_operator_does_not_add_allowed_bullet():
+    """Нелицензированный (mostbet/casino) -> буллет «✓ Разрешён в РК» НЕ добавляется."""
+    score = Score(
+        post_id="lic2", risk=88, category="gambling",
+        class_probs={"gambling": 0.92, "pyramid": 0.03, "fraud": 0.03, "clean": 0.02},
+        top_features=[
+            FeatureHit(feature="casino_betting_brand", weight=0.7, evidence="mostbet"),
+        ],
+    )
+    extracted = _extracted_with("mostbet casino — заноси депозит")
+    bullets = explain(score, [], extracted)
+    assert not any(b.startswith("✓ Разрешён в РК") for b in bullets)
+
+
+def test_licensed_bullet_absent_when_no_extracted():
+    """Без extracted (extracted=None) флаг безопасно пропускается, не падаем."""
+    score = Score(
+        post_id="lic3", risk=80, category="gambling",
+        class_probs={"gambling": 0.9, "pyramid": 0.04, "fraud": 0.03, "clean": 0.03},
+        top_features=[
+            FeatureHit(feature="casino_betting_brand", weight=0.7, evidence="Olimpbet"),
+        ],
+    )
+    bullets = explain(score, [])
+    assert isinstance(bullets, list)
+    assert not any(b.startswith("✓ Разрешён в РК") for b in bullets)

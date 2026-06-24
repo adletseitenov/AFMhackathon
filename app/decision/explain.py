@@ -20,6 +20,7 @@
     evidence, value могут быть None/пустыми.
 """
 
+from app.decision.licensed import licensed_operators as _licensed_operators
 from app.model.normalize import preview as _normalized_preview
 from app.models import Entity, Score
 
@@ -131,6 +132,14 @@ def explain(score: Score, entities: list[Entity], extracted=None) -> list[str]:
     if norm_bullet and norm_bullet not in seen:
         bullets.append(norm_bullet)
 
+    # 4) Флаг «разрешён в РК»: если в тексте упомянут ЛИЦЕНЗИРОВАННЫЙ букмекер —
+    #    добавляем информативный буллет ПЕРВЫМ. Риск НЕ занижаем (контент всё равно
+    #    гемблинг) — буллет лишь сообщает аналитику: блокировка не обязательна,
+    #    проверять надо рекламные нормы. Только при наличии extracted/текста. Crash-safe.
+    licensed_bullet = _licensed_allowed_bullet(extracted)
+    if licensed_bullet and licensed_bullet not in seen:
+        bullets.insert(0, licensed_bullet)
+
     return bullets
 
 
@@ -151,6 +160,27 @@ def _raw_text(extracted) -> str:
             getattr(extracted, "ocr_text", "") or "",
         ]
         return " ".join(parts).strip()
+    except Exception:
+        return ""
+
+
+def _licensed_allowed_bullet(extracted) -> str:
+    """Буллет «✓ Разрешён в РК», ТОЛЬКО если в тексте есть лицензированный оператор.
+
+    Использует licensed_operators() над исходным текстом из extracted/строки. Если
+    лицензированных нет (или текста нет) — пусто. Никогда не падает (crash-safe).
+    """
+    try:
+        text = _raw_text(extracted)
+        if not text or not text.strip():
+            return ""
+        ops = _licensed_operators(text)
+        if not ops:
+            return ""
+        return (
+            f"✓ Разрешён в РК: {', '.join(ops)} — блокировка не требуется, "
+            "проверьте рекламные нормы."
+        )
     except Exception:
         return ""
 

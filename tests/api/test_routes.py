@@ -153,6 +153,128 @@ def test_sort_combines_with_filters(sort_client):
     assert _ids(sort_client, "?sort=popularity&limit=1") == ["b"]
 
 
+# --- Флаг «разрешён в РК» (лицензированный букмекер) --------------------- #
+
+
+@pytest.fixture
+def licensed_feed_client(tmp_path, monkeypatch):
+    """2 revealed-поста: licensed (Olimpbet) и unlicensed (mostbet casino)."""
+    dbfile = tmp_path / "lic.db"
+    monkeypatch.setattr(config, "DB_PATH", dbfile)
+    conn = db.connect()
+    db.init_db(conn)
+    _add_post(conn, "lic", 82, "gambling", "escalate", 1,
+              caption="Ставки на Olimpbet — заходи и выигрывай")
+    _add_post(conn, "unlic", 90, "gambling", "escalate", 1,
+              caption="mostbet casino — заноси депозит сейчас")
+    conn.close()
+    with TestClient(app) as c:
+        yield c
+
+
+def _feed_row(client, pid):
+    for row in client.get("/api/feed").json():
+        if row["post"]["id"] == pid:
+            return row
+    raise AssertionError(f"post {pid} not in feed")
+
+
+def test_feed_licensed_flag_for_licensed_operator(licensed_feed_client):
+    row = _feed_row(licensed_feed_client, "lic")
+    assert row["post"]["licensed"] is True
+    assert row["post"]["licensed_operators"] == ["Olimpbet"]
+    # риск не занижен флагом
+    assert row["score"]["risk"] == 82
+    assert row["recommended_action"] == "escalate"
+
+
+def test_feed_no_licensed_flag_for_unlicensed_operator(licensed_feed_client):
+    row = _feed_row(licensed_feed_client, "unlic")
+    assert row["post"]["licensed"] is False
+    assert row["post"]["licensed_operators"] == []
+
+
+@pytest.fixture
+def licensed_detail_client(tmp_path, monkeypatch):
+    """drill-down пост с лицензированным оператором в combined_text."""
+    dbfile = tmp_path / "licdetail.db"
+    monkeypatch.setattr(config, "DB_PATH", dbfile)
+    conn = db.connect()
+    db.init_db(conn)
+    conn.execute(
+        "INSERT INTO posts(id, platform, author_handle, url, caption, posted_at, "
+        "media_path, thumb_url, source, revealed) VALUES("
+        "'lic','tiktok','@a','http://x','Ставки',"
+        "'2026-06-24T10:00:00',NULL,NULL,'seed',1)"
+    )
+    conn.execute(
+        "INSERT INTO extracted(post_id, caption, transcript, ocr_text, "
+        "visual_concepts_json, combined_text, entities_json) VALUES("
+        "'lic','Ставки','Olimpbet лучший букмекер','OCR',?,'Ставки Olimpbet лучший букмекер OCR',?)",
+        (json.dumps([]), json.dumps([])),
+    )
+    conn.execute(
+        "INSERT INTO scores(post_id, risk, category, class_probs_json, "
+        "top_features_json, recommended_action, scored_at) VALUES("
+        "'lic',82,'gambling',?,?,'escalate','2026-06-24T10:00:00')",
+        (json.dumps({"gambling": 0.9, "clean": 0.1}),
+         json.dumps([{"feature": "casino_betting_brand", "weight": 0.7,
+                      "evidence": "Olimpbet"}])),
+    )
+    # нелицензированный пост для негативного кейса
+    conn.execute(
+        "INSERT INTO posts(id, platform, author_handle, url, caption, posted_at, "
+        "media_path, thumb_url, source, revealed) VALUES("
+        "'unlic','tiktok','@b','http://y','депозит',"
+        "'2026-06-24T10:00:00',NULL,NULL,'seed',1)"
+    )
+    conn.execute(
+        "INSERT INTO extracted(post_id, caption, transcript, ocr_text, "
+        "visual_concepts_json, combined_text, entities_json) VALUES("
+        "'unlic','депозит','mostbet casino','OCR',?,'депозит mostbet casino OCR',?)",
+        (json.dumps([]), json.dumps([])),
+    )
+    conn.execute(
+        "INSERT INTO scores(post_id, risk, category, class_probs_json, "
+        "top_features_json, recommended_action, scored_at) VALUES("
+        "'unlic',90,'gambling',?,?,'escalate','2026-06-24T10:00:00')",
+        (json.dumps({"gambling": 0.95, "clean": 0.05}),
+         json.dumps([{"feature": "casino_betting_brand", "weight": 0.7,
+                      "evidence": "mostbet"}])),
+    )
+    conn.commit()
+    conn.close()
+    with TestClient(app) as c:
+        yield c
+
+
+def test_post_detail_licensed_flag_and_note(licensed_detail_client):
+    from app.decision.licensed import COMPLIANCE_HINT, REGISTRY_DISCLAIMER
+
+    data = licensed_detail_client.get("/api/post/lic").json()
+    assert data["post"]["licensed"] is True
+    assert data["post"]["licensed_operators"] == ["Olimpbet"]
+    # подсказка и дисклеймер присутствуют для лицензированного
+    assert data["licensed_note"] == COMPLIANCE_HINT
+    assert data["licensed_disclaimer"] == REGISTRY_DISCLAIMER
+    # риск не занижен
+    assert data["score"]["risk"] == 82
+    assert data["recommended_action"] == "escalate"
+    # explain добавил буллет «✓ Разрешён в РК» первым
+    assert data["explanation"][0].startswith("✓ Разрешён в РК")
+    assert "Olimpbet" in data["explanation"][0]
+
+
+def test_post_detail_no_licensed_flag_for_unlicensed(licensed_detail_client):
+    data = licensed_detail_client.get("/api/post/unlic").json()
+    assert data["post"]["licensed"] is False
+    assert data["post"]["licensed_operators"] == []
+    # подсказки пустые, когда не лицензирован
+    assert data["licensed_note"] == ""
+    assert data["licensed_disclaimer"] == ""
+    assert not any(b.startswith("✓ Разрешён в РК") for b in data["explanation"])
+
+
 @pytest.fixture
 def detail_client(tmp_path, monkeypatch):
     dbfile = tmp_path / "test.db"
@@ -191,7 +313,8 @@ def test_post_detail_shape(detail_client):
     assert resp.status_code == 200
     data = resp.json()
     assert set(data.keys()) == {
-        "post", "extracted", "score", "explanation", "recommended_action"}
+        "post", "extracted", "score", "explanation", "recommended_action",
+        "licensed_note", "licensed_disclaimer"}
     assert data["post"]["id"] == "p1"
     assert data["extracted"]["ocr_text"] == "OCR казино"
     assert data["extracted"]["visual_concepts"][0]["label"] == "casino"

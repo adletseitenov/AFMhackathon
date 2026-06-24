@@ -490,6 +490,13 @@
               <div class="mt-2.5 flex flex-wrap items-center gap-1.5">
                 <span class="badge-chip" :style="riskBadge(row.score.risk)" x-text="actionLabel(row.recommended_action)"></span>
                 <span class="badge-chip bg-canvas text-muted border border-line" x-text="categoryLabel(row.score.category)"></span>
+                <!-- лицензированный в РК оператор: блокировка не обязательна (риск-скор не занижается) -->
+                <span class="lic-badge"
+                      x-show="row.post.licensed || (row.post.licensed_operators && row.post.licensed_operators.length)"
+                      :title="'Оператор лицензирован в РК — блокировка не требуется. Проверьте рекламные нормы.' + ((row.post.licensed_operators && row.post.licensed_operators.length) ? ' Операторы: ' + row.post.licensed_operators.join(', ') : '')">
+                  <i class="ph ph-seal-check text-[12px]"></i>
+                  <span>Разрешён в РК</span>
+                </span>
                 <!-- provenance / source badge -->
                 <span class="src-badge" x-show="row.post.source">
                   <i :class="'ph ' + sourceIcon(row.post.source) + ' text-[12px]'"></i>
@@ -568,6 +575,22 @@
                     <span :style="riskMeterStyle(detail.score.risk)"></span>
                   </div>
                   <div class="text-[11px] text-muted mt-1.5">риск · 0–100</div>
+                </div>
+              </div>
+
+              <!-- ═══ Разрешён в РК: лицензированный оператор (смягчает восприятие) ═══
+                   Контент остаётся гемблингом (риск-скор как есть), но оператор легальный —
+                   блокировка не обязательна, проверять надо рекламные нормы. Решает человек. -->
+              <div class="lic-plate" x-show="detail.post.licensed" x-cloak>
+                <div class="flex items-start gap-2.5">
+                  <i class="ph ph-seal-check text-[18px] mt-px shrink-0"></i>
+                  <div class="min-w-0">
+                    <div class="text-[14px] font-semibold tracking-tight">
+                      Разрешён в РК<span x-show="detail.post.licensed_operators && detail.post.licensed_operators.length">: <span x-text="(detail.post.licensed_operators || []).join(', ')"></span></span>
+                    </div>
+                    <p class="text-[12px] leading-snug mt-1" x-show="detail.licensed_note" x-text="detail.licensed_note"></p>
+                    <p class="lic-plate-disclaimer mt-1.5" x-show="detail.licensed_disclaimer" x-text="detail.licensed_disclaimer"></p>
+                  </div>
                 </div>
               </div>
 

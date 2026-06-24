@@ -76,6 +76,39 @@ body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; 
   white-space: nowrap;
 }
 
+/* ---- «Разрешён в РК» badge + plate (licensed operator context) ----
+   Locked clean palette (#EDF3EC / #346538). The flag NEVER lowers the risk
+   score — gambling content stays scored as-is; it only tells the analyst the
+   operator is licensed, so a hard block is not mandatory and the focus shifts
+   to advertising-norm compliance. Calm green, never red. */
+.lic-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: #346538;
+  background: #EDF3EC;
+  border: 1px solid #CFE2D0;
+  border-radius: 9999px;
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+.lic-plate {
+  border-radius: 12px;
+  background: #EDF3EC;
+  border: 1px solid #CFE2D0;
+  padding: 14px 16px;
+  color: #346538;
+}
+.lic-plate .lic-plate-disclaimer {
+  font-size: 10px;
+  line-height: 1.5;
+  color: #5C7A5E;
+}
+
 /* ---- real preview thumbnail on feed cards ---- */
 .src-thumb {
   width: 64px;
