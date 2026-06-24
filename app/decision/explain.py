@@ -36,6 +36,11 @@ _FEATURE_LABELS = {
     "urgency": "Срочность/давление",
     "money_emoji": "Демонстрация денег",
     "visual_gambling": "Визуальные маркеры азартных игр",
+    "kz_bank_transfer": "Перевод через казахстанский банк (Kaspi/Halyk/Jusan/Forte)",
+    "kz_phone_number": "Казахстанский номер телефона (реквизиты)",
+    "kz_gambling_kz_lang": "Казахскоязычная лексика азартных игр",
+    "kz_pyramid_tenge": "Инвестиционные обещания в тенге",
+    "kz_local_bookmaker": "Кириллическое написание букмекера/HYIP-бренда",
 }
 
 # Русские метки для заметных извлечённых сущностей (Entity.type из extract_entities).

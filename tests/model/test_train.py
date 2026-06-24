@@ -14,7 +14,7 @@ from scripts.gen_dataset import main as gen_main
 
 def test_build_rows_volume_and_schema():
     rows = build_rows()
-    assert 800 <= len(rows) <= 1100
+    assert 800 <= len(rows) <= 1400
     for r in rows:
         assert set(r.keys()) == {"text", "lang", "label"}
         assert r["lang"] in {"ru", "kk"}

@@ -48,3 +48,6 @@ Thumbs.db
 # runtime watchlist state
 data/watchlist.json
 data/watchlist_stats.json
+
+# runtime server log
+data/server.log

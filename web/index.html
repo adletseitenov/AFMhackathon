@@ -489,29 +489,54 @@
                 </template>
               </div>
 
-              <div class="grid md:grid-cols-2 gap-5">
-                <!-- transcript -->
-                <div>
-                  <h3 class="section-h">Транскрипт <span class="text-muted/70 normal-case font-normal">(триггеры подсвечены)</span></h3>
-                  <p class="evidence" x-html="detail.extracted && detail.extracted.transcript ? highlight(detail.extracted.transcript, detail.score.top_features) : '<span class=&quot;text-muted&quot;>нет аудио-дорожки</span>'"></p>
+              <!-- ═══ Доказательства / разбор по модальностям ═══ -->
+              <div>
+                <div class="flex items-center gap-2 mb-3">
+                  <h3 class="section-h !mb-0">Доказательства</h3>
+                  <span class="text-[11px] text-muted normal-case font-normal tracking-normal">разбор по модальностям</span>
                 </div>
-                <!-- ocr -->
-                <div>
-                  <h3 class="section-h">Текст с экрана (OCR)</h3>
-                  <p class="evidence" x-html="detail.extracted && detail.extracted.ocr_text ? highlight(detail.extracted.ocr_text, detail.score.top_features) : '<span class=&quot;text-muted&quot;>текст на кадрах не распознан</span>'"></p>
-                </div>
-              </div>
 
-              <!-- visual concepts -->
-              <div x-show="detail.extracted && detail.extracted.visual_concepts && detail.extracted.visual_concepts.length">
-                <h3 class="section-h">Визуальные концепты</h3>
-                <div class="flex flex-wrap gap-1.5">
-                  <template x-for="vc in (detail.extracted ? detail.extracted.visual_concepts : [])" :key="vc.label">
-                    <span class="badge-chip bg-canvas text-ink border border-line normal-case tracking-normal">
-                      <span x-text="vc.label"></span>
-                      <span class="font-mono text-muted ml-1" x-text="Math.round((vc.score||0)*100) + '%'"></span>
-                    </span>
-                  </template>
+                <!-- empty-state: title-only post, no deep analysis ran -->
+                <div class="evidence-modal-empty"
+                     x-show="!(detail.extracted && (detail.extracted.transcript || detail.extracted.ocr_text || (detail.extracted.visual_concepts && detail.extracted.visual_concepts.length)))">
+                  Глубокий разбор не запускался для этого поста — оценка по тексту заголовка.
+                </div>
+
+                <!-- речь → текст (audio transcript) -->
+                <div class="evidence-modal-row" style="border-left: 3px solid #1F6C9F; padding-left: 10px;"
+                     x-show="detail.extracted && detail.extracted.transcript">
+                  <div class="flex items-center gap-2 mb-1.5">
+                    <i class="ph ph-waveform text-[14px]" style="color:#1F6C9F"></i>
+                    <span class="section-h !mb-0" style="color:#1F6C9F">Речь → текст</span>
+                  </div>
+                  <p class="evidence" x-html="highlight(detail.extracted.transcript, detail.score.top_features)"></p>
+                </div>
+
+                <!-- текст с экрана (OCR) -->
+                <div class="evidence-modal-row" style="border-left: 3px solid #956400; padding-left: 10px;"
+                     x-show="detail.extracted && detail.extracted.ocr_text">
+                  <div class="flex items-center gap-2 mb-1.5">
+                    <i class="ph ph-text-aa text-[14px]" style="color:#956400"></i>
+                    <span class="section-h !mb-0" style="color:#956400">Текст с экрана (OCR)</span>
+                  </div>
+                  <p class="evidence" x-html="highlight(detail.extracted.ocr_text, detail.score.top_features)"></p>
+                </div>
+
+                <!-- визуальные маркеры (CLIP) -->
+                <div class="evidence-modal-row" style="border-left: 3px solid #346538; padding-left: 10px;"
+                     x-show="detail.extracted && detail.extracted.visual_concepts && detail.extracted.visual_concepts.length">
+                  <div class="flex items-center gap-2 mb-1.5">
+                    <i class="ph ph-eye text-[14px]" style="color:#346538"></i>
+                    <span class="section-h !mb-0" style="color:#346538">Визуальные маркеры</span>
+                  </div>
+                  <div class="flex flex-wrap gap-1.5">
+                    <template x-for="vc in (detail.extracted ? detail.extracted.visual_concepts : [])" :key="vc.label">
+                      <span class="badge-chip bg-canvas text-ink border border-line normal-case tracking-normal">
+                        <span x-text="vc.label"></span>
+                        <span class="font-mono text-muted ml-1" x-text="Math.round((vc.score||0)*100) + '%'"></span>
+                      </span>
+                    </template>
+                  </div>
                 </div>
               </div>
 
@@ -846,29 +871,54 @@
 
             <div x-show="liveResult.note" class="rounded-soft border border-[#F0E4BE] bg-[#FBF3DB] text-[#956400] text-[12px] px-3 py-2" x-text="liveResult.note"></div>
 
-            <!-- multimodal evidence: proves real video analysis -->
-            <div class="grid md:grid-cols-2 gap-5">
-              <div>
-                <h3 class="section-h">Транскрипт (аудио→текст)</h3>
-                <p class="evidence" x-text="liveResult.extracted && liveResult.extracted.transcript ? liveResult.extracted.transcript : 'нет аудио-дорожки'"
-                   :class="liveResult.extracted && liveResult.extracted.transcript ? '' : 'text-muted'"></p>
+            <!-- ═══ Доказательства / разбор по модальностям ═══ -->
+            <div>
+              <div class="flex items-center gap-2 mb-3">
+                <h3 class="section-h !mb-0">Доказательства</h3>
+                <span class="text-[11px] text-muted normal-case font-normal tracking-normal">разбор по модальностям</span>
               </div>
-              <div>
-                <h3 class="section-h">Текст с экрана (OCR)</h3>
-                <p class="evidence" x-text="liveResult.extracted && liveResult.extracted.ocr_text ? liveResult.extracted.ocr_text : 'текст на кадрах не распознан'"
-                   :class="liveResult.extracted && liveResult.extracted.ocr_text ? '' : 'text-muted'"></p>
-              </div>
-            </div>
 
-            <div x-show="liveResult.extracted && liveResult.extracted.visual_concepts && liveResult.extracted.visual_concepts.length">
-              <h3 class="section-h">Визуальные концепты</h3>
-              <div class="flex flex-wrap gap-1.5">
-                <template x-for="vc in (liveResult.extracted ? liveResult.extracted.visual_concepts : [])" :key="vc.label">
-                  <span class="badge-chip bg-canvas text-ink border border-line normal-case tracking-normal">
-                    <span x-text="vc.label"></span>
-                    <span class="font-mono text-muted ml-1" x-text="Math.round((vc.score||0)*100) + '%'"></span>
-                  </span>
-                </template>
+              <!-- empty-state: title-only post -->
+              <div class="evidence-modal-empty"
+                   x-show="!(liveResult.extracted && (liveResult.extracted.transcript || liveResult.extracted.ocr_text || (liveResult.extracted.visual_concepts && liveResult.extracted.visual_concepts.length)))">
+                Глубокий разбор не запускался для этого поста — оценка по тексту заголовка.
+              </div>
+
+              <!-- речь → текст -->
+              <div class="evidence-modal-row" style="border-left: 3px solid #1F6C9F; padding-left: 10px;"
+                   x-show="liveResult.extracted && liveResult.extracted.transcript">
+                <div class="flex items-center gap-2 mb-1.5">
+                  <i class="ph ph-waveform text-[14px]" style="color:#1F6C9F"></i>
+                  <span class="section-h !mb-0" style="color:#1F6C9F">Речь → текст</span>
+                </div>
+                <p class="evidence" x-html="highlight(liveResult.extracted.transcript, liveResult.score.top_features)"></p>
+              </div>
+
+              <!-- текст с экрана (OCR) -->
+              <div class="evidence-modal-row" style="border-left: 3px solid #956400; padding-left: 10px;"
+                   x-show="liveResult.extracted && liveResult.extracted.ocr_text">
+                <div class="flex items-center gap-2 mb-1.5">
+                  <i class="ph ph-text-aa text-[14px]" style="color:#956400"></i>
+                  <span class="section-h !mb-0" style="color:#956400">Текст с экрана (OCR)</span>
+                </div>
+                <p class="evidence" x-html="highlight(liveResult.extracted.ocr_text, liveResult.score.top_features)"></p>
+              </div>
+
+              <!-- визуальные маркеры (CLIP) -->
+              <div class="evidence-modal-row" style="border-left: 3px solid #346538; padding-left: 10px;"
+                   x-show="liveResult.extracted && liveResult.extracted.visual_concepts && liveResult.extracted.visual_concepts.length">
+                <div class="flex items-center gap-2 mb-1.5">
+                  <i class="ph ph-eye text-[14px]" style="color:#346538"></i>
+                  <span class="section-h !mb-0" style="color:#346538">Визуальные маркеры</span>
+                </div>
+                <div class="flex flex-wrap gap-1.5">
+                  <template x-for="vc in (liveResult.extracted ? liveResult.extracted.visual_concepts : [])" :key="vc.label">
+                    <span class="badge-chip bg-canvas text-ink border border-line normal-case tracking-normal">
+                      <span x-text="vc.label"></span>
+                      <span class="font-mono text-muted ml-1" x-text="Math.round((vc.score||0)*100) + '%'"></span>
+                    </span>
+                  </template>
+                </div>
               </div>
             </div>
 
