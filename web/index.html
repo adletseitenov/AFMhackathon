@@ -232,9 +232,17 @@
             <option value="fraud">мошенничество</option>
             <option value="clean">чисто</option>
           </select>
-          <button @click="tick()" :disabled="ticking"
+          <select x-model="platformFilter" @change="loadFeed()" title="Фильтр по соцсети"
+                  class="bg-surface border border-line rounded-soft text-[12px] px-2 py-1 outline-none focus:border-muted">
+            <option value="">все соцсети</option>
+            <option value="youtube">YouTube</option>
+            <option value="telegram">Telegram</option>
+            <option value="tiktok">TikTok</option>
+            <option value="instagram">Instagram</option>
+          </select>
+          <button @click="refresh()" :disabled="ticking" title="Обновить ленту"
                   class="press inline-flex items-center gap-1.5 px-2.5 py-1 rounded-soft border border-line bg-surface text-[12px] text-ink hover:bg-canvas disabled:opacity-50">
-            <i class="ph ph-plus text-[14px]"></i><span x-text="ticking ? '…' : 'Тик'"></span>
+            <i class="ph text-[14px]" :class="ticking ? 'ph-circle-notch animate-spin' : 'ph-arrows-clockwise'"></i><span x-text="ticking ? '…' : 'Обновить'"></span>
           </button>
         </div>
 
@@ -264,7 +272,7 @@
           <div class="rounded-card border border-dashed border-line bg-surface p-8 text-center">
             <i class="ph ph-queue text-[26px] text-muted"></i>
             <p class="text-[13px] text-ink mt-2 font-medium">Очередь пуста</p>
-            <p class="text-[12px] text-muted mt-1">Нажмите «Тик», чтобы подгрузить поток постов.</p>
+            <p class="text-[12px] text-muted mt-1">Нажмите «Найти опасное в интернете» или просканируйте Telegram-канал.</p>
           </div>
         </template>
 

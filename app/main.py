@@ -79,6 +79,11 @@ def _scan_watchlist_once() -> None:
 async def _watchlist_loop() -> None:
     """Периодически сканирует watchlist-каналы (реальный сбор). Сетевой/CPU-разбор
     выносим в executor, чтобы не блокировать event-loop. Безопасен к отмене."""
+    try:
+        await asyncio.sleep(12)  # первый проход вскоре после старта — мониторинг сразу «живой»
+        await asyncio.get_event_loop().run_in_executor(None, _scan_watchlist_once)
+    except asyncio.CancelledError:
+        return
     while True:
         try:
             await asyncio.sleep(WATCHLIST_SCAN_INTERVAL_SEC)

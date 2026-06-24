@@ -125,6 +125,7 @@ function kozApp() {
     feedLoading: true,
     feedError: "",
     categoryFilter: "",
+    platformFilter: "",
     realOnly: true,          // ЛЕНТА defaults to real posts only (real_only=1)
     ticking: false,
     _knownIds: new Set(),
@@ -225,6 +226,7 @@ function kozApp() {
       let url = "/api/feed?limit=100";
       if (this.realOnly) url += "&real_only=1";   // по умолчанию — только реальные посты
       if (this.categoryFilter) url += "&category=" + encodeURIComponent(this.categoryFilter);
+      if (this.platformFilter) url += "&platform=" + encodeURIComponent(this.platformFilter);
       try {
         const r = await fetch(url);
         if (!r.ok) throw new Error("HTTP " + r.status);
@@ -259,14 +261,18 @@ function kozApp() {
       return this._newIds.has(id);
     },
 
-    async tick() {
+    // «Обновить»: всегда перезагружает ленту (видимый отклик). В демо-режиме
+    // (real_only выкл) дополнительно раскрывает следующую порцию seed-постов.
+    async refresh() {
       if (this.ticking) return;
       this.ticking = true;
       try {
-        await fetch("/api/tick", { method: "POST" });
+        if (!this.realOnly) {
+          await fetch("/api/tick", { method: "POST" });
+        }
         await this.loadFeed();
       } catch (e) {
-        this.feedError = "Тик не выполнен: " + e.message;
+        this.feedError = "Не удалось обновить: " + e.message;
       } finally {
         this.ticking = false;
       }

@@ -70,6 +70,7 @@ def api_feed(
     request: Request,
     min_risk: int = Query(0),
     category: "str | None" = Query(None),
+    platform: "str | None" = Query(None),
     limit: int = Query(100),
     real_only: int = Query(0),
 ):
@@ -90,6 +91,9 @@ def api_feed(
     if category:
         sql += " AND s.category = ?"
         params.append(category)
+    if platform:
+        sql += " AND p.platform = ?"
+        params.append(platform)
     sql += " ORDER BY s.risk DESC LIMIT ?"
     params.append(limit)
 
