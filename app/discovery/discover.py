@@ -29,7 +29,7 @@ _VIDEO_PLATFORMS = {"tiktok", "instagram"}
 # букмекеров/HYIP, чья реклама в РК нелегальна (проверено: yt-dlp отдаёт их ленту).
 _TIKTOK_SEED_ACCOUNTS = [
     "mostbet_official", "1win", "parimatch", "olimpbet", "betboom",
-    "1xbet_global", "melbet_official", "pin_up_global", "mostbet",
+    "1xbet_global", "betwinner", "1win_casino", "olimp",
 ]
 # Instagram через yt-dlp закрыт логин-волом (extract data fails) — публичный
 # автопоиск без входа невозможен; список оставлен как best-effort на будущее.
@@ -82,7 +82,7 @@ def _ingest_video_platform(conn, platform: str, accounts: list, per_account: int
     ингестим. Свежие посты кладём в fresh_out для опционального deep-разбора. Любой
     сбой по аккаунту/видео проглатывается. -> {"added", "flagged"}.
     """
-    added = flagged = 0
+    added = flagged = found = accounts_ok = 0
     n = max(1, len(accounts))
     for i, handle in enumerate(accounts):
         if report:
@@ -91,6 +91,9 @@ def _ingest_video_platform(conn, platform: str, accounts: list, per_account: int
             vids = fetch_mod.list_account_videos(_account_url(platform, handle), per_account)
         except Exception:
             vids = []
+        if vids:
+            accounts_ok += 1
+            found += len(vids)
         for url in vids:
             if not url or url in seen_urls:
                 continue
@@ -128,7 +131,8 @@ def _ingest_video_platform(conn, platform: str, accounts: list, per_account: int
             fresh_out.append({"post": post, "risk": sc.risk})
             samples.append({"url": post.url, "platform": platform,
                             "risk": sc.risk, "category": sc.category})
-    return {"added": added, "flagged": flagged}
+    return {"added": added, "flagged": flagged, "found": found,
+            "accounts_ok": accounts_ok}
 
 
 def _deep_analyze(conn, fresh: list, deep_top: int, report=None) -> dict:
@@ -242,15 +246,20 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
     # 1b) TikTok/Instagram — РЕАЛЬНЫЙ yt-dlp по курируемым аккаунтам казино/букмекеров
     #     (поисковики такие видео не индексируют; instagram закрыт логин-волом).
     fresh_platform: list = []
+    platform_found = platform_accounts_ok = 0
     if do_video_platform:
         accounts = _platform_accounts(platform)
-        per_account = max(2, min(6, per_query + 1))
+        # Тянем поглубже в ленту каждого аккаунта, чтобы повторные прогоны находили
+        # НОВЫЕ ролики (а не только первые, уже собранные).
+        per_account = max(6, min(15, per_query * 3))
         res = _ingest_video_platform(
             conn, platform, accounts, per_account,
             seen_urls, by_category, samples, fresh_platform, report=report,
         )
         platform_added += res["added"]
         flagged += res["flagged"]
+        platform_found = res.get("found", 0)
+        platform_accounts_ok = res.get("accounts_ok", 0)
 
     # 2) Telegram — найти публичные каналы по запросам и реально их просканировать.
     if do_telegram:
@@ -291,9 +300,13 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
         if platform == "instagram":
             note = ("Instagram не отдаёт публичный автопоиск без входа. "
                     "Используйте «Живую проверку» ссылки на reel, либо TikTok/YouTube/Telegram.")
+        elif platform_accounts_ok > 0:
+            # Видео нашлись, но все уже в ленте — это НЕ сбой, а дедуп.
+            note = (f"Новых постов нет: все {platform_found} найденных роликов уже в ленте — "
+                    "выберите «TikTok» в фильтре очереди, чтобы их увидеть. Фон ловит новые сам.")
         else:
-            note = (f"{platform}: аккаунты сейчас недоступны для извлечения. "
-                    "Попробуйте позже или используйте «Живую проверку» ссылки.")
+            note = ("TikTok сейчас ограничивает извлечение (rate-limit). Повторите через "
+                    "пару минут или используйте «Живую проверку» ссылки.")
 
     if report:
         report("готово", 100)
