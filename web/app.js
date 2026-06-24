@@ -412,6 +412,8 @@ function kozApp() {
         queries: res.queries || [],
         samples: res.samples || [],
         note: res.note || "",
+        telegram_chats: res.telegram_chats || 0,
+        telegram_chat_links: res.telegram_chat_links || [],
       };
     },
 

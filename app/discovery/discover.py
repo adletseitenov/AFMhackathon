@@ -37,6 +37,14 @@ _INSTAGRAM_SEED_ACCOUNTS = [
     "1xbet", "mostbet", "parimatch",
 ]
 
+# Telegram: DDG-поиск каналов часто недоступен (таймаут), поэтому база — курируемые
+# публичные казино/букмекер-каналы (скан через t.me/s/ web-preview), а ДАЛЬШЕ
+# снежный ком по t.me-ссылкам в сообщениях находит НОВЫЕ каналы и ЧАТЫ.
+_TELEGRAM_SEED_CHANNELS = [
+    "MelBet_official", "mostbet_casino", "azino777", "slottica", "melbet",
+    "joycasino", "riobet",
+]
+
 
 def _account_url(platform: str, handle: str) -> str:
     h = handle.lstrip("@")
@@ -76,11 +84,13 @@ def _ingest_video_platform(conn, platform: str, accounts: list, per_account: int
     """Автопоиск опасных видео на tiktok/instagram через РЕАЛЬНЫЙ yt-dlp по
     курируемым аккаунтам казино/букмекеров (поисковики такие видео не индексируют).
 
-    Для каждого аккаунта: fetch_mod.list_account_videos (лента, без скачивания),
-    далее по каждому видео fetch_mod.extract_meta (метаданные, без скачивания) ->
-    скорим по «<хэндл> <описание>» (хэндл бренда поднимает сигнал казино/букмекера),
-    ингестим. Свежие посты кладём в fresh_out для опционального deep-разбора. Любой
-    сбой по аккаунту/видео проглатывается. -> {"added", "flagged"}.
+    Для каждого аккаунта: fetch_mod.list_account_posts отдаёт ленту с МЕТАДАННЫМИ
+    (title/описание С ХЭШТЕГАМИ, uploader, превью) за ОДИН запрос — без поштучных
+    обращений к каждому видео (это обходит IP-rate-limit и даёт текст #тегов).
+    Скорим по «<хэндл> <описание+теги>» (бренд-хэндл + #хэштеги ловят казино/
+    букмекера — поиск идёт не только по имени, но и по тегам/ключевым словам).
+    Свежие посты кладём в fresh_out для опционального deep-разбора. Любой сбой по
+    аккаунту проглатывается. -> {"added","flagged","found","accounts_ok"}.
     """
     added = flagged = found = accounts_ok = 0
     n = max(1, len(accounts))
@@ -88,35 +98,31 @@ def _ingest_video_platform(conn, platform: str, accounts: list, per_account: int
         if report:
             report(f"{platform}: @{handle}", 5 + int(70 * i / n))
         try:
-            vids = fetch_mod.list_account_videos(_account_url(platform, handle), per_account)
+            posts = fetch_mod.list_account_posts(_account_url(platform, handle), per_account)
         except Exception:
-            vids = []
-        if vids:
+            posts = []
+        if posts:
             accounts_ok += 1
-            found += len(vids)
-        for url in vids:
+            found += len(posts)
+        for p in posts:
+            url = p.get("url")
             if not url or url in seen_urls:
                 continue
             seen_urls.add(url)
             pid = _pid(platform, url)
             if db.get_post(conn, pid) is not None:
                 continue
-            try:
-                meta = fetch_mod.extract_meta(url)
-            except Exception:
-                meta = {}
-            if not meta:
-                continue
-            author = (meta.get("author_handle") or handle).lstrip("@")
-            cap = normalize(meta.get("caption") or "")
-            # Скоринг по «<хэндл> <описание>»: имя бренд-аккаунта (mostbet/1xbet/…)
-            # само по себе — сильный сигнал нелегальной рекламы казино/букмекера.
-            score_text = normalize(f"{author} {meta.get('caption') or ''}".strip())
+            author = (p.get("author_handle") or handle).lstrip("@")
+            text = p.get("description") or p.get("title") or ""
+            cap = normalize(text)
+            # «<хэндл> <описание+#теги>»: имя бренд-аккаунта и хэштеги (#1xbet, #casino,
+            # #ставки) — сильные сигналы нелегальной рекламы казино/букмекера.
+            score_text = normalize(f"{author} {text}".strip())
             post = Post(
                 id=pid, platform=platform, author_handle=author,
-                url=meta.get("url") or url, caption=cap,
+                url=url, caption=cap,
                 posted_at=datetime.now(timezone.utc).isoformat(),
-                media_path=None, thumb_url=meta.get("thumb_url") or None,
+                media_path=None, thumb_url=p.get("thumb_url") or None,
                 source="discovered",
             )
             try:
@@ -249,9 +255,9 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
     platform_found = platform_accounts_ok = 0
     if do_video_platform:
         accounts = _platform_accounts(platform)
-        # Тянем поглубже в ленту каждого аккаунта, чтобы повторные прогоны находили
-        # НОВЫЕ ролики (а не только первые, уже собранные).
-        per_account = max(6, min(15, per_query * 3))
+        # Тянем поглубже в ленту каждого аккаунта (extract_flat = 1 запрос/аккаунт,
+        # так что это дёшево) — повторные прогоны находят НОВЫЕ ролики.
+        per_account = max(10, min(20, per_query * 4))
         res = _ingest_video_platform(
             conn, platform, accounts, per_account,
             seen_urls, by_category, samples, fresh_platform, report=report,
@@ -261,24 +267,40 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
         platform_found = res.get("found", 0)
         platform_accounts_ok = res.get("accounts_ok", 0)
 
-    # 2) Telegram — найти публичные каналы по запросам и реально их просканировать.
+    # 2) Telegram — курируемые казино-каналы (надёжно) + DDG best-effort + СНЕЖНЫЙ КОМ
+    #    по t.me-ссылкам в сообщениях: находит НОВЫЕ каналы И ЧАТЫ (не только каналы).
+    tg_chats: list = []
     if do_telegram:
         if report:
-            report("поиск Telegram-каналов", 80)
+            report("скан Telegram-каналов", 80)
         try:
             from app.ingestion.scan import scan_telegram as _scan
             scan_tg = scan_tg or _scan
-            channels: list = []
-            for q in queries[:3]:
-                for ch in discover_telegram_channels(q, limit=3):
-                    if ch not in channels:
-                        channels.append(ch)
-            if channels:
+            channels: list = list(_TELEGRAM_SEED_CHANNELS)
+            # DDG-поиск каналов часто недоступен (таймаут) — best-effort, не критично.
+            try:
+                for q in queries[:3]:
+                    for ch in discover_telegram_channels(q, limit=3):
+                        if ch not in channels:
+                            channels.append(ch)
+            except Exception:
+                pass
+            tg = scan_tg(channels[:12], conn=conn)
+            tg_added = tg.get("added", 0)
+            flagged += tg.get("flagged", 0)
+            tg_chats = list(tg.get("discovered_chats", []))
+            # снежный ком: сканируем НОВЫЕ каналы/чаты, найденные в сообщениях (один хоп).
+            seen_ch = {c.lower() for c in channels}
+            new_ch = [c for c in tg.get("discovered_channels", []) if c.lower() not in seen_ch][:8]
+            if new_ch:
                 if report:
-                    report(f"скан {len(channels)} Telegram-каналов", 88)
-                tg = scan_tg(channels[:8], conn=conn)
-                tg_added = tg.get("added", 0)
-                flagged += tg.get("flagged", 0)
+                    report(f"снежный ком: +{len(new_ch)} Telegram", 88)
+                tg2 = scan_tg(new_ch, conn=conn)
+                tg_added += tg2.get("added", 0)
+                flagged += tg2.get("flagged", 0)
+                for c in tg2.get("discovered_chats", []):
+                    if c not in tg_chats:
+                        tg_chats.append(c)
         except Exception:
             pass
 
@@ -317,6 +339,7 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
         "deep_analyzed": deep_analyzed,
         "flagged": flagged, "queries": n, "samples": samples[:10],
         "by_category": by_category,
+        "telegram_chats": len(tg_chats), "telegram_chat_links": tg_chats[:10],
     }
     if note:
         result["note"] = note

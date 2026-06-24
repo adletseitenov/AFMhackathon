@@ -223,24 +223,20 @@ def test_platform_tiktok_uses_account_listing_and_meta(tmp_path, monkeypatch):
     monkeypatch.setattr(d, "score_post", _fake_score)
     monkeypatch.setattr(d, "_TIKTOK_SEED_ACCOUNTS", ["promo"])  # один аккаунт — детерминизм
 
-    calls = {"accounts": [], "meta": []}
+    calls = {"accounts": []}
 
-    def _fake_list(account_url, limit=5):
+    def _fake_posts(account_url, limit=12):
         calls["accounts"].append(account_url)
-        return ["https://www.tiktok.com/@promo/video/123"]
+        return [{"url": "https://www.tiktok.com/@promo/video/123",
+                 "title": "Казино занос #промокод", "description": "Казино занос #промокод",
+                 "author_handle": "promo", "thumb_url": "https://thumb/x.jpg",
+                 "view_count": 1000}]
 
-    def _fake_meta(url):
-        calls["meta"].append(url)
-        return {"caption": "Казино занос промокод", "author_handle": "promo",
-                "platform": "tiktok", "thumb_url": "https://thumb/x.jpg", "url": url}
-
-    monkeypatch.setattr(fetch_mod, "list_account_videos", _fake_list)
-    monkeypatch.setattr(fetch_mod, "extract_meta", _fake_meta)
+    monkeypatch.setattr(fetch_mod, "list_account_posts", _fake_posts)
 
     res = discovery.discover(conn, queries=["q1"], per_query=1, search_yt=_fake_yt,
                              with_telegram=False, platform="tiktok")
     assert calls["accounts"] == ["https://www.tiktok.com/@promo"]
-    assert calls["meta"] == ["https://www.tiktok.com/@promo/video/123"]
     assert res["platform_added"] == 1
     assert res["youtube_added"] == 0  # ytsearch не используется для tiktok
     assert res["added"] == 1

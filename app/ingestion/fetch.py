@@ -310,6 +310,18 @@ def list_account_videos(account_url: str, limit: int = 5) -> list:
     Надёжный путь автопоиска по TikTok: поисковики не индексируют отдельные ролики,
     а yt-dlp по странице аккаунта (`tiktok.com/@handle`) отдаёт ленту реальных видео.
     """
+    return [p["url"] for p in list_account_posts(account_url, limit) if p.get("url")]
+
+
+def list_account_posts(account_url: str, limit: int = 12) -> list:
+    """Последние посты аккаунта с МЕТАДАННЫМИ за ОДИН запрос (extract_flat).
+
+    Ключевое: extract_flat у TikTok отдаёт title/description (С ХЭШТЕГАМИ),
+    uploader, thumbnail и счётчики прямо в записях ленты — без поштучных запросов
+    к каждому видео (это и обходит IP-rate-limit, и даёт текст #тегов для скоринга
+    по тегам/ключевым словам). -> list[dict{url,title,description,author_handle,
+    thumb_url,view_count}], [] при сбое.
+    """
     if not _is_safe_public_url(account_url):
         return []
     try:
@@ -323,8 +335,18 @@ def list_account_videos(account_url: str, limit: int = 5) -> list:
         out = []
         for e in info.get("entries") or []:
             u = e.get("url") or e.get("webpage_url")
-            if u:
-                out.append(u)
+            if not u:
+                continue
+            thumbs = e.get("thumbnails") or []
+            thumb = e.get("thumbnail") or (thumbs[-1].get("url") if thumbs else "")
+            out.append({
+                "url": u,
+                "title": e.get("title") or "",
+                "description": e.get("description") or "",
+                "author_handle": e.get("uploader") or e.get("uploader_id") or e.get("channel") or "",
+                "thumb_url": thumb or "",
+                "view_count": e.get("view_count") or 0,
+            })
         return out
     except Exception:
         return []
@@ -513,4 +535,35 @@ def fetch_telegram_channel(url: str, limit: int = 10) -> list:
         return posts
     except Exception:
         # деградация: понятное пустое поведение, вызывающий код не падает
+        return []
+
+
+# Все t.me-ссылки на странице web-preview (посты, КНОПКИ, описание) — для снежного кома.
+_TME_PAGE_RE = re.compile(
+    r"t\.me/(s/)?(\+[A-Za-z0-9_\-]{5,}|joinchat/[A-Za-z0-9_\-]+|[A-Za-z0-9_]{4,32})",
+    re.I,
+)
+
+
+def fetch_telegram_links(url: str) -> list:
+    """Все t.me-ссылки со страницы web-preview канала (включая КНОПКИ и описание, где
+    казино-каналы дают ссылки на ЧАТЫ/боты/инвайты) — для снежного кома по чатам.
+
+    Возвращает сырые refs (имя канала/чата, '+hash' или 'joinchat/hash'), дедуп;
+    [] при ошибке (не пробрасывает исключение).
+    """
+    try:
+        channel = _channel_from_url(url)
+        if not channel:
+            return []
+        html = _http_get(_TGME_PREVIEW.format(channel=channel))
+        out, seen = [], set()
+        for _s, ref in _TME_PAGE_RE.findall(html):
+            low = ref.lower()
+            if low in seen:
+                continue
+            seen.add(low)
+            out.append(ref)
+        return out
+    except Exception:
         return []

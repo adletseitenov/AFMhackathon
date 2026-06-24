@@ -210,6 +210,13 @@
             <p x-show="discoverResult.note" class="mt-1.5 flex items-start gap-1.5 text-[11px] text-[#956400]">
               <i class="ph ph-info text-[12px] mt-px shrink-0"></i><span x-text="discoverResult.note"></span>
             </p>
+            <div x-show="discoverResult.telegram_chats" class="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px]">
+              <span class="text-muted"><i class="ph ph-chats-circle text-[12px] align-[-2px]"></i> найдены чаты:</span>
+              <template x-for="(c, i) in discoverResult.telegram_chat_links" :key="i">
+                <a :href="'https://t.me/' + c.replace(/^@/,'').replace(/^joinchat\//,'+')" target="_blank" rel="noopener"
+                   class="lift inline-flex items-center px-2 py-0.5 rounded-soft border border-line bg-surface font-mono" x-text="c"></a>
+              </template>
+            </div>
             <!-- samples: real clickable provenance -->
             <div class="mt-2 flex flex-wrap gap-1.5" x-show="discoverResult.samples && discoverResult.samples.length">
               <template x-for="(s, i) in discoverResult.samples" :key="i">
