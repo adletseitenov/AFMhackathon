@@ -328,18 +328,33 @@ def _http_get(url: str) -> str:
 class _TgPreviewParser(HTMLParser):
     """Best-effort парсер публичного t.me/s/<channel> превью.
 
-    Собирает текст всех блоков с классом tgme_widget_message_text. Учитывает
-    вложенные <div> внутри текста сообщения, считая баланс открытий/закрытий.
+    Для каждого сообщения собирает: текст (tgme_widget_message_text), РЕАЛЬНЫЙ id
+    (data-post="channel/123" -> точная ссылка t.me/channel/123) и превью-картинку
+    (background-image у *_photo_wrap). messages: list[{"id","text","thumb"}].
     """
+
+    _PHOTO_RE = re.compile(r"url\(['\"]?([^'\")]+)")
 
     def __init__(self) -> None:
         super().__init__()
         self._depth = 0  # глубина вложенности внутри блока текста
-        self._buf: list[str] = []
-        self.messages: list[str] = []
+        self._buf: list = []
+        self._cur_post = ""   # data-post текущего сообщения ("channel/123")
+        self._cur_photo = ""  # фон-картинка текущего сообщения
+        self.messages: list = []
 
     def handle_starttag(self, tag, attrs) -> None:
-        cls = dict(attrs).get("class", "") or ""
+        a = dict(attrs)
+        dp = a.get("data-post")
+        if dp:
+            self._cur_post = dp
+            self._cur_photo = ""
+        cls = a.get("class", "") or ""
+        style = a.get("style", "") or ""
+        if "_photo" in cls and "background-image" in style:
+            m = self._PHOTO_RE.search(style)
+            if m:
+                self._cur_photo = m.group(1)
         if self._depth:
             # уже внутри текстового блока — считаем вложенные div'ы
             if tag == "div":
@@ -354,7 +369,9 @@ class _TgPreviewParser(HTMLParser):
             if self._depth == 0:
                 txt = unescape("".join(self._buf)).strip()
                 if txt:
-                    self.messages.append(txt)
+                    self.messages.append(
+                        {"id": self._cur_post, "text": txt, "thumb": self._cur_photo}
+                    )
 
     def handle_data(self, data) -> None:
         if self._depth:
@@ -384,16 +401,28 @@ def fetch_telegram_channel(url: str, limit: int = 10) -> list:
         parser = _TgPreviewParser()
         parser.feed(html)
         posts: list = []
-        for i, text in enumerate(parser.messages[:limit]):
+        for idx, msg in enumerate(parser.messages[:limit]):
+            # поддержка старого формата (строка) и нового (dict)
+            if isinstance(msg, dict):
+                post_path = msg.get("id") or ""
+                text = msg.get("text") or ""
+                thumb = msg.get("thumb") or None
+            else:
+                post_path, text, thumb = "", msg, None
+            msg_id = post_path.split("/")[-1] if "/" in post_path else ""
+            real_url = (
+                f"https://t.me/{post_path}" if "/" in post_path
+                else f"https://t.me/{channel}"
+            )
             posts.append(Post(
-                id=f"tglive_{channel}_{i}",
+                id=f"tglive_{channel}_{msg_id or idx}",
                 platform="telegram",
                 author_handle="@" + channel,
-                url=f"https://t.me/{channel}/{i}" if i else f"https://t.me/{channel}",
+                url=real_url,                     # РЕАЛЬНАЯ ссылка на конкретный пост
                 caption=normalize(text),
                 posted_at="",
                 media_path=None,
-                thumb_url=None,
+                thumb_url=thumb,                  # РЕАЛЬНОЕ превью (если есть)
                 source="live",
             ))
         return posts

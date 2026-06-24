@@ -215,7 +215,23 @@ async def api_analyze(request: Request):
                 post_id=post.id, caption=cap, transcript="", ocr_text="",
                 visual_concepts=[], combined_text=cap, entities=[],
             )
-        # 3) скоринг своей моделью + персист (своё соединение — мы в worker-потоке).
+        # 3) НЕ засоряем ленту, если контента нет (скачивание упало / нет текста).
+        has_content = bool(
+            (post.caption or extracted.transcript or extracted.ocr_text or "").strip()
+        )
+        if not has_content:
+            report("готово", 100)
+            note = (note + " " if note else "") + (
+                "Не удалось получить контент из источника (скачивание/доступ) — пост НЕ "
+                "добавлен в ленту. Надёжный путь — загрузка файла."
+            )
+            return {
+                "post_id": post.id, "post": asdict(post), "extracted": asdict(extracted),
+                "score": {"post_id": post.id, "risk": 0, "category": "clean",
+                          "class_probs": {}, "top_features": []},
+                "explanation": [], "recommended_action": "auto_clear", "note": note,
+            }
+        # 4) скоринг своей моделью + персист (своё соединение — мы в worker-потоке).
         report("скоринг своей моделью", 88)
         wconn = db.connect()
         try:
