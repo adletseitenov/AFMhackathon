@@ -267,6 +267,69 @@ def fetch_link(url: str):
     return media_path, frames, meta
 
 
+def _ydl_meta_opts() -> dict:
+    """Опции yt-dlp для извлечения МЕТАДАННЫХ без скачивания медиа."""
+    opts = {"quiet": True, "noplaylist": True, "no_warnings": True, "skip_download": True}
+    js_rt = _js_runtimes()
+    if js_rt:
+        opts["js_runtimes"] = js_rt
+    return opts
+
+
+def extract_meta(url: str) -> dict:
+    """Метаданные поста БЕЗ скачивания медиа — для дешёвого скоринга ленты.
+
+    Используется автопоиском по площадкам (tiktok/instagram): сначала скорим по
+    описанию/автору, тяжёлую загрузку (Whisper/OCR/CLIP) делаем только для top-N в
+    deep-режиме. -> {caption, author_handle, platform, thumb_url, url} или {} при
+    SSRF-блоке/сбое (НЕ пробрасывает исключение).
+    """
+    if not _is_safe_public_url(url):
+        return {}
+    try:
+        import yt_dlp
+
+        with yt_dlp.YoutubeDL(_ydl_meta_opts()) as ydl:
+            info = ydl.extract_info(url, download=False)
+        return {
+            "caption": info.get("description") or info.get("title") or "",
+            "author_handle": (
+                info.get("uploader") or info.get("uploader_id") or info.get("channel") or ""
+            ),
+            "platform": (info.get("extractor_key") or "").lower(),
+            "thumb_url": info.get("thumbnail") or "",
+            "url": info.get("webpage_url") or url,
+        }
+    except Exception:
+        return {}
+
+
+def list_account_videos(account_url: str, limit: int = 5) -> list:
+    """URL последних видео аккаунта (extract_flat, без скачивания). [] при сбое.
+
+    Надёжный путь автопоиска по TikTok: поисковики не индексируют отдельные ролики,
+    а yt-dlp по странице аккаунта (`tiktok.com/@handle`) отдаёт ленту реальных видео.
+    """
+    if not _is_safe_public_url(account_url):
+        return []
+    try:
+        import yt_dlp
+
+        opts = _ydl_meta_opts()
+        opts["extract_flat"] = True
+        opts["playlistend"] = max(1, int(limit))
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(account_url, download=False)
+        out = []
+        for e in info.get("entries") or []:
+            u = e.get("url") or e.get("webpage_url")
+            if u:
+                out.append(u)
+        return out
+    except Exception:
+        return []
+
+
 def handle_upload(file_bytes: bytes, filename: str):
     """Сохраняет загруженный файл, сэмплит кадры. -> (media_path, frames, meta)."""
     os.makedirs(MEDIA_DIR, exist_ok=True)

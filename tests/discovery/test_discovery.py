@@ -213,33 +213,34 @@ def test_platform_telegram_skips_youtube(tmp_path, monkeypatch):
     assert res["telegram_added"] == 4
 
 
-def test_platform_tiktok_uses_video_links_and_fetch_post(tmp_path, monkeypatch):
+def test_platform_tiktok_uses_account_listing_and_meta(tmp_path, monkeypatch):
+    # tiktok-поиск идёт через РЕАЛЬНЫЙ yt-dlp по курируемым аккаунтам:
+    # list_account_videos (лента) -> extract_meta (метаданные) -> скор по «<хэндл> <описание>».
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "tt.db")
     conn = db.connect(); db.init_db(conn)
     import app.discovery.discover as d
     import app.ingestion.fetch as fetch_mod
     monkeypatch.setattr(d, "score_post", _fake_score)
+    monkeypatch.setattr(d, "_TIKTOK_SEED_ACCOUNTS", ["promo"])  # один аккаунт — детерминизм
 
-    calls = {"links": 0, "fetch": []}
+    calls = {"accounts": [], "meta": []}
 
-    def _fake_links(query, site, limit=6):
-        calls["links"] += 1
-        assert site == "tiktok"
+    def _fake_list(account_url, limit=5):
+        calls["accounts"].append(account_url)
         return ["https://www.tiktok.com/@promo/video/123"]
 
-    def _fake_fetch_post(url=None, upload=None):
-        calls["fetch"].append(url)
-        return Post(id="x", platform="tiktok", author_handle="@promo", url=url,
-                    caption="Казино занос промокод", posted_at="",
-                    media_path=None, thumb_url="https://thumb/x.jpg", source="live")
+    def _fake_meta(url):
+        calls["meta"].append(url)
+        return {"caption": "Казино занос промокод", "author_handle": "promo",
+                "platform": "tiktok", "thumb_url": "https://thumb/x.jpg", "url": url}
 
-    monkeypatch.setattr(d.web_mod, "discover_video_links", _fake_links)
-    monkeypatch.setattr(fetch_mod, "fetch_post", _fake_fetch_post)
+    monkeypatch.setattr(fetch_mod, "list_account_videos", _fake_list)
+    monkeypatch.setattr(fetch_mod, "extract_meta", _fake_meta)
 
     res = discovery.discover(conn, queries=["q1"], per_query=1, search_yt=_fake_yt,
                              with_telegram=False, platform="tiktok")
-    assert calls["links"] == 1
-    assert calls["fetch"] == ["https://www.tiktok.com/@promo/video/123"]
+    assert calls["accounts"] == ["https://www.tiktok.com/@promo"]
+    assert calls["meta"] == ["https://www.tiktok.com/@promo/video/123"]
     assert res["platform_added"] == 1
     assert res["youtube_added"] == 0  # ytsearch не используется для tiktok
     assert res["added"] == 1
@@ -247,7 +248,7 @@ def test_platform_tiktok_uses_video_links_and_fetch_post(tmp_path, monkeypatch):
     assert rows[0]["url"] == "https://www.tiktok.com/@promo/video/123"
     assert rows[0]["platform"] == "tiktok"
     assert rows[0]["source"] == "discovered"
-    assert res["flagged"] >= 1  # казино-подпись -> эскалация
+    assert res["flagged"] >= 1  # казино-подпись + хэндл -> эскалация
 
 
 def test_deep_triggers_fetch_extract_and_rescore(tmp_path, monkeypatch):

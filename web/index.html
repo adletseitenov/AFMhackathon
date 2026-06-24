@@ -207,6 +207,9 @@
             <p x-show="_discoverDeepRun" class="mt-1.5 text-[11px] text-muted">
               Глубокий режим разобрал каждое видео по аудио-дорожке, тексту с экрана и визуальным маркерам.
             </p>
+            <p x-show="discoverResult.note" class="mt-1.5 flex items-start gap-1.5 text-[11px] text-[#956400]">
+              <i class="ph ph-info text-[12px] mt-px shrink-0"></i><span x-text="discoverResult.note"></span>
+            </p>
             <!-- samples: real clickable provenance -->
             <div class="mt-2 flex flex-wrap gap-1.5" x-show="discoverResult.samples && discoverResult.samples.length">
               <template x-for="(s, i) in discoverResult.samples" :key="i">

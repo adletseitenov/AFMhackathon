@@ -67,13 +67,13 @@ const PLATFORM_ICONS = {
 const SOURCE_LABELS = {
   seed: "демо",
   live: "загрузка",
-  discovered: "YouTube-поиск",
+  discovered: "автопоиск",
   telegram: "Telegram",
 };
 const SOURCE_ICONS = {
   seed: "ph-flask",
   live: "ph-download-simple",
-  discovered: "ph-youtube-logo",
+  discovered: "ph-radar",
   telegram: "ph-telegram-logo",
 };
 
@@ -411,6 +411,7 @@ function kozApp() {
         flagged: res.flagged || 0,
         queries: res.queries || [],
         samples: res.samples || [],
+        note: res.note || "",
       };
     },
 
