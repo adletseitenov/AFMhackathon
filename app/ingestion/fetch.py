@@ -36,6 +36,18 @@ def _load_cv2():
         return None
 
 
+def _ffmpeg_location() -> "str | None":
+    """Путь к ffmpeg из imageio_ffmpeg (bundled), чтобы yt-dlp нашёл его без
+    системной установки. Лениво и мягко: None если пакет/бинарь недоступны."""
+    try:
+        import imageio_ffmpeg
+
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        return exe if exe and os.path.exists(exe) else None
+    except Exception:
+        return None
+
+
 def sample_frames(media_path: str) -> list:
     """Возвращает до _FRAME_COUNT путей-кадров (PNG). [] если cv2/видео недоступны."""
     if not media_path or not os.path.exists(media_path):
@@ -150,6 +162,11 @@ def _ytdlp_download(url: str):
             "noplaylist": True,
             "format": "mp4/best",
         }
+        ffmpeg_loc = _ffmpeg_location()
+        if ffmpeg_loc:
+            # yt-dlp использует ffmpeg для merge/постобработки; берём bundled бинарь
+            # из imageio_ffmpeg, если системного нет.
+            opts["ffmpeg_location"] = ffmpeg_loc
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
             media_path = ydl.prepare_filename(info)

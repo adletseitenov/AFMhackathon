@@ -19,7 +19,7 @@ CONCEPT_PROMPTS = [
     ("cash_flaunt", "a person flaunting stacks of cash money"),
     ("luxury_car", "an expensive luxury sports car"),
 ]
-_SCORE_THRESHOLD = 0.30
+_SCORE_THRESHOLD = 0.20
 
 _MODEL = None
 _PREPROCESS = None
