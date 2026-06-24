@@ -32,10 +32,10 @@ def test_extracted_fields():
 
 
 def test_post_fields():
-    # view_count — последнее поле (единственное с дефолтом, чтобы dataclass был валиден).
+    # view_count + live — поля с дефолтом, идут последними (dataclass валиден).
     assert _names(Post) == [
         "id", "platform", "author_handle", "url", "caption",
-        "posted_at", "media_path", "thumb_url", "source", "view_count",
+        "posted_at", "media_path", "thumb_url", "source", "view_count", "live",
     ]
 
 

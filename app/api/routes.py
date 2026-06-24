@@ -72,6 +72,8 @@ def _post_dict(r, licensed_text: "str | None" = None) -> dict:
         "url": r["url"], "caption": r["caption"], "posted_at": r["posted_at"],
         "media_path": r["media_path"], "thumb_url": r["thumb_url"], "source": r["source"],
         "view_count": r["view_count"],
+        # «прямой эфир»: поле live может отсутствовать в выборках без него -> False.
+        "live": bool(r["live"]) if "live" in r.keys() else False,
         "licensed_operators": ops, "licensed": bool(ops),
     }
 
@@ -115,7 +117,7 @@ def api_feed(
                                   _SORT_ORDER_BY[_DEFAULT_SORT])
     sql = (
         "SELECT p.id, p.platform, p.author_handle, p.url, p.caption, p.posted_at, "
-        "p.media_path, p.thumb_url, p.source, p.view_count, "
+        "p.media_path, p.thumb_url, p.source, p.view_count, p.live, "
         "s.post_id, s.risk, s.category, s.class_probs_json, s.top_features_json, "
         "s.recommended_action "
         "FROM posts p JOIN scores s ON s.post_id = p.id "

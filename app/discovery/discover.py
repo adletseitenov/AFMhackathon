@@ -304,6 +304,7 @@ def _ingest_live(conn, platform: str, accounts: list, seen_urls: set,
             posted_at=datetime.now(timezone.utc).isoformat(),
             media_path=None, thumb_url=info.get("thumb_url") or None,
             source="discovered", view_count=info.get("view_count") or 0,
+            live=True,
         )
         try:
             sc = _ingest(conn, post, cap, score_text=score_text)
@@ -413,12 +414,25 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
     # (а не VOD/посты). Для youtube/telegram «эфирного» сид-режима нет — там работаем
     # как обычно (VOD/посты), но при платформенном live VOD-ветку отключаем.
     want_live = content_type == "live"
-    do_live = want_live and platform in _LIVE_PLATFORMS
+    # Какие площадки проверять на ПРЯМОЙ ЭФИР: конкретная live-площадка -> только она;
+    # «all»/пусто -> ВСЕ live-площадки (иначе live при выбранном «Все» давал 0 находок).
+    # youtube/telegram эфирного сид-режима не имеют -> [] (честный 0 + нота).
+    if want_live:
+        _LIVE_ORDER = [p for p in ("twitch", "kick", "tiktok", "instagram") if p in _LIVE_PLATFORMS]
+        if platform in _LIVE_PLATFORMS:
+            live_platforms = [platform]
+        elif platform in ("all", ""):
+            live_platforms = _LIVE_ORDER
+        else:
+            live_platforms = []
+    else:
+        live_platforms = []
+    do_live = bool(live_platforms)
 
     do_youtube = platform in ("all", "youtube") and not want_live
     do_telegram = (with_telegram and platform in ("all", "telegram") and not want_live)
-    do_video_platform = platform in _VIDEO_PLATFORMS and not do_live
-    do_streaming = platform in _STREAMING_PLATFORMS and not do_live
+    do_video_platform = platform in _VIDEO_PLATFORMS and not want_live
+    do_streaming = platform in _STREAMING_PLATFORMS and not want_live
 
     # 1) YouTube — реальные ролики с реальными ссылками.
     if do_youtube:
@@ -493,14 +507,14 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
     fresh_live: list = []
     live_added = 0
     if do_live:
-        accounts = _live_accounts(platform)
-        lres = _ingest_live(
-            conn, platform, accounts,
-            seen_urls, by_category, samples, fresh_live, report=report,
-        )
-        live_added = lres["added"]
-        platform_added += lres["added"]
-        flagged += lres["flagged"]
+        for lp in live_platforms:
+            lres = _ingest_live(
+                conn, lp, _live_accounts(lp),
+                seen_urls, by_category, samples, fresh_live, report=report,
+            )
+            live_added += lres["added"]
+            platform_added += lres["added"]
+            flagged += lres["flagged"]
 
     # 2) Telegram — курируемые казино-каналы (надёжно) + DDG best-effort + СНЕЖНЫЙ КОМ
     #    по t.me-ссылкам в сообщениях: находит НОВЫЕ каналы И ЧАТЫ (не только каналы).

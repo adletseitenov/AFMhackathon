@@ -34,7 +34,7 @@ def test_posts_columns(tmp_path):
     assert _cols(conn, "posts") == [
         "id", "platform", "author_handle", "url", "caption",
         "posted_at", "media_path", "thumb_url", "source", "revealed",
-        "view_count",
+        "view_count", "live",
     ]
 
 
