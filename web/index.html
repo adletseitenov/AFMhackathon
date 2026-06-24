@@ -1471,7 +1471,9 @@
             <template x-for="entry in watchEntries" :key="entry.platform + ':' + entry.target">
               <li class="watch-row flex items-center gap-4 rounded-card border border-line bg-canvas px-4 py-3">
                 <i :class="'ph ' + platformIcon(entry.platform) + ' text-[18px] text-muted shrink-0'"></i>
-                <div class="min-w-0 flex-1">
+                <div class="min-w-0 flex-1 cursor-pointer" role="button" tabindex="0"
+                     @click="openMonitorEntry(entry)" @keydown.enter="openMonitorEntry(entry)"
+                     title="Открыть статистику и все посты этой записи">
                   <div class="flex items-center flex-wrap gap-2">
                     <span class="font-mono text-[13px] text-ink truncate" x-text="entry.target"></span>
                     <span class="src-badge">
@@ -1502,6 +1504,11 @@
                     </span>
                   </div>
                 </div>
+                <button @click="openMonitorEntry(entry)" title="Открыть статистику и все посты"
+                        aria-label="Открыть статистику"
+                        class="lift inline-flex items-center gap-1 px-2 h-7 rounded-soft text-[11px] text-ink border border-line hover:bg-surface shrink-0">
+                  <span>статистика</span><i class="ph ph-caret-right text-[12px]"></i>
+                </button>
                 <button @click="removeWatchEntry(entry.target, entry.platform)" title="Убрать из наблюдения" aria-label="Убрать из наблюдения"
                         class="lift grid place-items-center w-7 h-7 rounded-soft text-muted hover:text-[#9F2F2D] hover:bg-[#FDEBEC] shrink-0">
                   <i class="ph ph-x text-[14px]"></i>
@@ -1509,6 +1516,113 @@
               </li>
             </template>
           </ul>
+
+          <!-- ===== МОДАЛКА: статистика и все посты записи мониторинга ===== -->
+          <template x-if="monitorDetail || monitorDetailLoading">
+            <div class="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:p-8"
+                 @click.self="closeMonitorEntry()" @keydown.escape.window="closeMonitorEntry()"
+                 role="dialog" aria-modal="true" aria-label="Статистика записи мониторинга">
+              <div class="w-full max-w-3xl rounded-card border border-line bg-surface shadow-diffuse my-2">
+                <!-- header -->
+                <div class="flex items-center gap-3 border-b border-line px-5 py-4">
+                  <i :class="'ph ' + platformIcon((monitorDetail && monitorDetail.platform) || 'all') + ' text-[20px] text-muted shrink-0'"></i>
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-center flex-wrap gap-2">
+                      <span class="font-mono text-[15px] font-medium text-ink truncate" x-text="(monitorDetail && monitorDetail.target) || monitorTarget"></span>
+                      <span class="lic-badge" x-show="monitorDetail && monitorDetail.licensed === true">
+                        <i class="ph ph-seal-check text-[12px]"></i><span>разрешён в РК</span>
+                      </span>
+                    </div>
+                    <p class="text-[11px] text-muted mt-0.5">статистика и все связанные посты</p>
+                  </div>
+                  <button @click="closeMonitorEntry()" aria-label="Закрыть"
+                          class="lift grid place-items-center w-8 h-8 rounded-soft text-muted hover:text-ink hover:bg-canvas shrink-0">
+                    <i class="ph ph-x text-[16px]"></i>
+                  </button>
+                </div>
+
+                <!-- loading -->
+                <template x-if="monitorDetailLoading">
+                  <div class="px-5 py-10 text-center text-[13px] text-muted">
+                    <i class="ph ph-circle-notch animate-spin text-[18px]"></i>
+                    <p class="mt-2">Собираю посты и статистику…</p>
+                  </div>
+                </template>
+
+                <template x-if="monitorDetail && !monitorDetailLoading">
+                  <div class="px-5 py-4">
+                    <!-- stats -->
+                    <div class="grid grid-cols-3 gap-3">
+                      <div class="rounded-soft border border-line bg-canvas px-3 py-2">
+                        <div class="text-[11px] text-muted uppercase tracking-wide">всего постов</div>
+                        <div class="font-mono tnum text-[18px] text-ink" x-text="monitorDetail.stats.total"></div>
+                      </div>
+                      <div class="rounded-soft border border-line bg-canvas px-3 py-2">
+                        <div class="text-[11px] text-muted uppercase tracking-wide">эскалаций</div>
+                        <div class="font-mono tnum text-[18px]" style="color:#9F2F2D" x-text="monitorDetail.stats.flagged"></div>
+                      </div>
+                      <div class="rounded-soft border border-line bg-canvas px-3 py-2">
+                        <div class="text-[11px] text-muted uppercase tracking-wide">средний риск</div>
+                        <div class="font-mono tnum text-[18px]" :style="riskBadge(Math.round(monitorDetail.stats.avg_risk))" x-text="monitorDetail.stats.avg_risk"></div>
+                      </div>
+                    </div>
+                    <!-- by category -->
+                    <div class="mt-3 flex flex-wrap gap-1.5" x-show="Object.keys(monitorDetail.stats.by_category || {}).length">
+                      <template x-for="(cnt, cat) in monitorDetail.stats.by_category" :key="cat">
+                        <span class="inline-flex items-center gap-1 px-2 py-1 rounded-soft border border-line bg-canvas text-[11px]">
+                          <span class="text-muted" x-text="categoryLabel(cat)"></span>
+                          <span class="font-mono tnum text-ink" x-text="cnt"></span>
+                        </span>
+                      </template>
+                    </div>
+
+                    <!-- focused recommendations (что предпринять по этой конторе) -->
+                    <div class="mt-4" x-show="monitorRecs && monitorRecs.length">
+                      <div class="section-h">что предпринять</div>
+                      <ul class="space-y-1.5 mt-2">
+                        <template x-for="(rec, ri) in monitorRecs" :key="ri">
+                          <li class="rounded-soft border border-line bg-canvas px-3 py-2">
+                            <div class="flex items-center gap-2">
+                              <span class="prio-badge" :style="priorityBadge(rec.priority)" x-text="priorityLabel(rec.priority)"></span>
+                              <span class="text-[12px] font-medium text-ink" x-text="rec.title"></span>
+                            </div>
+                            <p class="text-[11px] text-muted mt-1" x-text="rec.action"></p>
+                          </li>
+                        </template>
+                      </ul>
+                    </div>
+
+                    <!-- posts list -->
+                    <div class="section-h mt-4">все посты (<span x-text="monitorDetail.posts.length"></span>)</div>
+                    <div class="mt-2 max-h-[42vh] overflow-y-auto -mx-1 px-1 space-y-1.5">
+                      <template x-if="!monitorDetail.posts.length">
+                        <p class="text-[12px] text-muted py-4 text-center">Постов по этой записи пока нет.</p>
+                      </template>
+                      <template x-for="row in monitorDetail.posts" :key="row.post.id">
+                        <article @click="closeMonitorEntry(); openPost(row.post.id)" tabindex="0"
+                                 @keydown.enter="closeMonitorEntry(); openPost(row.post.id)"
+                                 class="lift cursor-pointer rounded-soft border border-line bg-canvas px-3 py-2 flex items-center gap-3"
+                                 title="Открыть разбор поста">
+                          <span class="font-mono tnum text-[13px] shrink-0" :style="riskBadge(row.score.risk)" x-text="row.score.risk"></span>
+                          <div class="min-w-0 flex-1">
+                            <div class="flex items-center gap-2 text-[11px] text-muted">
+                              <i :class="'ph ' + platformIcon(row.post.platform)"></i>
+                              <span x-text="row.post.author_handle || row.post.platform"></span>
+                              <span x-text="categoryLabel(row.score.category)"></span>
+                              <span class="lic-badge" x-show="row.post.licensed"><i class="ph ph-seal-check text-[10px]"></i>разрешён в РК</span>
+                              <span x-show="row.post.live" class="text-[#9F2F2D]">🔴 эфир</span>
+                            </div>
+                            <p class="text-[12px] text-ink truncate" x-text="row.post.caption || row.post.url"></p>
+                          </div>
+                          <i class="ph ph-caret-right text-[13px] text-muted shrink-0"></i>
+                        </article>
+                      </template>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </template>
 
           <!-- error -->
           <template x-if="watchEntriesError">

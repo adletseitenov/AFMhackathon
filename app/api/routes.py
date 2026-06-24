@@ -91,6 +91,87 @@ def _score_dict_from_row(r) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# GET /api/monitor/entry — детальная СТАТИСТИКА по записи мониторинга:
+# все посты конторы/канала + агрегаты (для отдельной страницы по клику в
+# «Мониторинге»). Контора (оператор) -> совпадение бренда в тексте/хэндле/
+# combined_text по ВСЕМ площадкам; канал площадки -> то же + фильтр площадки.
+# --------------------------------------------------------------------------- #
+_MONITOR_CHANNEL_PLATFORMS = {
+    "telegram", "youtube", "tiktok", "twitch", "kick", "instagram",
+}
+
+
+@router.get("/api/monitor/entry")
+def api_monitor_entry(
+    request: Request,
+    target: str = Query(...),
+    platform: str = Query("all"),
+    limit: int = Query(200),
+):
+    conn = request.app.state.db
+    t = (target or "").strip().lstrip("@").lower()
+    p = (platform or "all").strip().lower()
+    empty = {
+        "target": target, "platform": platform,
+        "licensed": bool(licensed_operators(target or "")),
+        "licensed_operators": licensed_operators(target or ""),
+        "stats": {"total": 0, "flagged": 0, "avg_risk": 0,
+                  "by_category": {}, "by_action": {}},
+        "posts": [],
+    }
+    if not t:
+        return empty
+    like = f"%{t}%"
+    sql = (
+        "SELECT p.id, p.platform, p.author_handle, p.url, p.caption, p.posted_at, "
+        "p.media_path, p.thumb_url, p.source, p.view_count, p.live, p.revealed, "
+        "s.post_id, s.risk, s.category, s.class_probs_json, s.top_features_json, "
+        "s.recommended_action, e.combined_text AS _ct "
+        "FROM posts p JOIN scores s ON s.post_id = p.id "
+        "LEFT JOIN extracted e ON e.post_id = p.id "
+        "WHERE (lower(p.caption) LIKE ? OR lower(replace(p.author_handle, '@', '')) LIKE ? "
+        "OR lower(COALESCE(e.combined_text, '')) LIKE ?) "
+    )
+    params: list = [like, like, like]
+    if p in _MONITOR_CHANNEL_PLATFORMS:
+        sql += "AND p.platform = ? "
+        params.append(p)
+    sql += "ORDER BY s.risk DESC, p.posted_at DESC LIMIT ?"
+    params.append(max(1, min(500, int(limit))))
+
+    rows = conn.execute(sql, params).fetchall()
+    posts: list = []
+    by_cat: dict = {}
+    by_act: dict = {}
+    risks: list = []
+    flagged = 0
+    for r in rows:
+        ct = r["_ct"] if "_ct" in r.keys() else None
+        posts.append({
+            "post": _post_dict(r, licensed_text=ct or None),
+            "score": _score_dict_from_row(r),
+            "recommended_action": r["recommended_action"],
+        })
+        by_cat[r["category"]] = by_cat.get(r["category"], 0) + 1
+        act = r["recommended_action"]
+        by_act[act] = by_act.get(act, 0) + 1
+        risks.append(r["risk"])
+        if act == "escalate":
+            flagged += 1
+    avg_risk = round(sum(risks) / len(risks), 1) if risks else 0
+    return {
+        "target": target, "platform": platform,
+        "licensed": bool(licensed_operators(target or "")),
+        "licensed_operators": licensed_operators(target or ""),
+        "stats": {
+            "total": len(posts), "flagged": flagged, "avg_risk": avg_risk,
+            "by_category": by_cat, "by_action": by_act,
+        },
+        "posts": posts,
+    }
+
+
+# --------------------------------------------------------------------------- #
 # GET /api/feed — приоритетная очередь revealed-постов с выбираемой сортировкой.
 # --------------------------------------------------------------------------- #
 

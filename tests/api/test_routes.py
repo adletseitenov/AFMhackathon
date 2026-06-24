@@ -749,3 +749,46 @@ def test_post_detail_graph_no_entities_still_200(graph_solo_client):
     # без сущностей нет рёбер; но собственный узел-пост присутствует
     assert graph["edges"] == []
     assert "post:solo" in {n["id"] for n in graph["nodes"]}
+
+
+# --- GET /api/monitor/entry — детальная статистика записи мониторинга ---
+
+@pytest.fixture
+def monitor_client(tmp_path, monkeypatch):
+    """Посты, упоминающие бренд 1xbet (m1/m2), + посторонний (m3)."""
+    dbfile = tmp_path / "mon.db"
+    monkeypatch.setattr(config, "DB_PATH", dbfile)
+    conn = db.connect()
+    db.init_db(conn)
+    _add_post(conn, "m1", 90, "gambling", "escalate", 1, caption="промокод 1xbet занос")
+    _add_post(conn, "m2", 80, "gambling", "escalate", 1, caption="1xBet бонус сегодня")
+    _add_post(conn, "m3", 20, "clean", "auto_clear", 1, caption="погода в Алматы")
+    conn.close()
+    with TestClient(app) as c:
+        yield c
+
+
+def test_monitor_entry_brand_aggregates_and_posts(monitor_client):
+    d = monitor_client.get("/api/monitor/entry",
+                           params={"target": "1xbet", "platform": "all"}).json()
+    assert d["target"] == "1xbet"
+    # m1,m2 упоминают 1xbet; m3 — нет
+    assert d["stats"]["total"] == 2
+    assert d["stats"]["flagged"] == 2  # оба escalate
+    assert d["stats"]["by_category"] == {"gambling": 2}
+    assert {row["post"]["id"] for row in d["posts"]} == {"m1", "m2"}
+    assert d["posts"][0]["score"]["risk"] == 90  # сортировка по риску убыв.
+    assert d["licensed"] is False  # 1xbet не лицензирован в РК
+
+
+def test_monitor_entry_empty_target_is_safe(monitor_client):
+    d = monitor_client.get("/api/monitor/entry",
+                           params={"target": "", "platform": "all"}).json()
+    assert d["stats"]["total"] == 0 and d["posts"] == []
+
+
+def test_monitor_entry_platform_filter(monitor_client):
+    # все засеяны на tiktok -> фильтр youtube не вернёт ничего
+    d = monitor_client.get("/api/monitor/entry",
+                           params={"target": "1xbet", "platform": "youtube"}).json()
+    assert d["stats"]["total"] == 0

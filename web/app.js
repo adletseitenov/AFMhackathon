@@ -207,6 +207,12 @@ function kozApp() {
     watchWatched: [],
     watchEntriesLoading: false,
     watchEntriesError: "",
+    // детальная статистика записи мониторинга (модалка по клику): все посts + агрегаты
+    monitorDetail: null,
+    monitorDetailLoading: false,
+    monitorDetailError: "",
+    monitorTarget: "",
+    monitorRecs: [],
     watchPlatform: "telegram",  // выбранная площадка в форме добавления
     watchPlatforms: [
       { id: "telegram", label: "Telegram" },
@@ -1438,6 +1444,49 @@ function kozApp() {
     // GET /api/watchlist/entries -> {entries:[...], watched:[...]}. entries несут
     // статистику по каждой площадке/конторе (telegram|youtube|tiktok|twitch|kick|
     // instagram|operator). Это ОСНОВНОЙ дашборд вкладки «Мониторинг».
+    // Открыть детальную страницу (модалку) записи мониторинга: все посты этой
+    // конторы/канала + статистика (GET /api/monitor/entry) + решения по ней
+    // (GET /api/recommendations?focus=brand:<target>). Клик по посту -> разбор.
+    async openMonitorEntry(entry) {
+      if (!entry || !entry.target) return;
+      this.monitorTarget = entry.target;
+      this.monitorDetail = null;
+      this.monitorRecs = [];
+      this.monitorDetailError = "";
+      this.monitorDetailLoading = true;
+      try {
+        const qs = new URLSearchParams({ target: entry.target, platform: entry.platform || "all" });
+        const r = await fetch("/api/monitor/entry?" + qs.toString());
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        this.monitorDetail = await r.json();
+      } catch (e) {
+        this.monitorDetailError = "Не удалось загрузить статистику: " + e.message;
+        this.monitorDetail = {
+          target: entry.target, platform: entry.platform, licensed: false,
+          stats: { total: 0, flagged: 0, avg_risk: 0, by_category: {}, by_action: {} },
+          posts: [],
+        };
+      } finally {
+        this.monitorDetailLoading = false;
+      }
+      // решения по этой конторе/бренду (best-effort; «нет данных»-заглушки прячем)
+      try {
+        const rr = await fetch("/api/recommendations?focus=" + encodeURIComponent("brand:" + entry.target));
+        if (rr.ok) {
+          const data = await rr.json();
+          this.monitorRecs = (data.recommendations || [])
+            .filter((x) => !/нет данных/i.test(x.title || ""))
+            .slice(0, 4);
+        }
+      } catch (e) { /* решения — необязательны */ }
+    },
+
+    closeMonitorEntry() {
+      this.monitorDetail = null;
+      this.monitorDetailLoading = false;
+      this.monitorRecs = [];
+    },
+
     async loadWatchEntries() {
       this.watchEntriesLoading = true;
       this.watchEntriesError = "";
