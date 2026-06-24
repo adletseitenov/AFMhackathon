@@ -442,11 +442,14 @@
             <!-- samples: real clickable provenance -->
             <div class="mt-2 flex flex-wrap gap-1.5" x-show="discoverResult.samples && discoverResult.samples.length">
               <template x-for="(s, i) in discoverResult.samples" :key="i">
-                <a :href="s.url" target="_blank" rel="noopener"
-                   class="lift inline-flex items-center gap-1.5 px-2 py-1 rounded-soft border border-line bg-surface text-[11px] hover:bg-canvas">
+                <a :href="s.url" :target="s.id ? null : '_blank'" rel="noopener"
+                   @click="if (s.id) { $event.preventDefault(); openPost(s.id); }"
+                   :title="s.id ? 'Открыть разбор в консоли' : 'Открыть оригинал'"
+                   class="lift inline-flex items-center gap-1.5 px-2 py-1 rounded-soft border border-line bg-surface text-[11px] hover:bg-canvas cursor-pointer">
                   <i :class="'ph ' + platformIcon(s.platform) + ' text-[13px] text-muted'"></i>
                   <span class="font-mono font-medium tnum" :style="riskBadge(s.risk)" x-text="s.risk"></span>
                   <span class="text-muted" x-text="categoryLabel(s.category)"></span>
+                  <i class="ph ph-magnifying-glass text-[11px] text-muted" x-show="s.id"></i>
                 </a>
               </template>
             </div>

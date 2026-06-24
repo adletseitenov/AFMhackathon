@@ -168,7 +168,7 @@ def _ingest_video_platform(conn, platform: str, accounts: list, per_account: int
             if sc.risk >= config.ESCALATE_THRESHOLD:
                 flagged += 1
             fresh_out.append({"post": post, "risk": sc.risk})
-            samples.append({"url": post.url, "platform": platform,
+            samples.append({"id": post.id, "url": post.url, "platform": platform,
                             "risk": sc.risk, "category": sc.category})
     return {"added": added, "flagged": flagged, "found": found,
             "accounts_ok": accounts_ok}
@@ -238,7 +238,7 @@ def _ingest_streaming(conn, platform: str, streamers: list, per_streamer: int,
             if sc.risk >= config.ESCALATE_THRESHOLD:
                 flagged += 1
             fresh_out.append({"post": post, "risk": sc.risk})
-            samples.append({"url": post.url, "platform": platform,
+            samples.append({"id": post.id, "url": post.url, "platform": platform,
                             "risk": sc.risk, "category": sc.category})
     return {"added": added, "flagged": flagged}
 
@@ -316,7 +316,7 @@ def _ingest_live(conn, platform: str, accounts: list, seen_urls: set,
         if sc.risk >= config.ESCALATE_THRESHOLD:
             flagged += 1
         fresh_out.append({"post": post, "risk": sc.risk, "live": True})
-        samples.append({"url": post.url, "platform": platform, "risk": sc.risk,
+        samples.append({"id": post.id, "url": post.url, "platform": platform, "risk": sc.risk,
                         "category": sc.category, "live": True})
     return {"added": added, "flagged": flagged}
 
@@ -466,7 +466,7 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
                 if sc.risk >= config.ESCALATE_THRESHOLD:
                     flagged += 1
                 fresh_yt.append({"post": post, "risk": sc.risk})
-                samples.append({"url": url, "platform": "youtube", "risk": sc.risk, "category": sc.category})
+                samples.append({"id": post.id, "url": url, "platform": "youtube", "risk": sc.risk, "category": sc.category})
 
     # 1b) TikTok/Instagram — РЕАЛЬНЫЙ yt-dlp по курируемым аккаунтам казино/букмекеров
     #     (поисковики такие видео не индексируют; instagram закрыт логин-волом).
