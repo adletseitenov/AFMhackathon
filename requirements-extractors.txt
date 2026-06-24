@@ -11,6 +11,8 @@ easyocr
 open-clip-torch
 opencv-python-headless
 imageio-ffmpeg
+curl_cffi
+# curl_cffi нужен yt-dlp для impersonation TikTok (иначе "Unable to extract universal data").
 # Плюс нужен статичный ffmpeg+ffprobe (yt-dlp использует для нарезки/склейки).
 # Windows: https://github.com/BtbN/FFmpeg-Builds/releases -> положить ffmpeg.exe/ffprobe.exe
 # в C:\Users\<user>\AppData\Local\Programs\ffmpeg\bin (app.ingestion.fetch._ffmpeg_location ищет там).

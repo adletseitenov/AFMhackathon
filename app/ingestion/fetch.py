@@ -24,6 +24,7 @@ from app.extractors.text import normalize
 from app.models import Post
 
 _FRAME_COUNT = 5
+_MAX_VIDEO_SECONDS = 90.0  # разбираем первые N сек видео (скорость на CPU, достаточно для рекламы)
 
 
 def _load_cv2():
@@ -37,8 +38,35 @@ def _load_cv2():
 
 
 def _ffmpeg_location() -> "str | None":
-    """Путь к ffmpeg из imageio_ffmpeg (bundled), чтобы yt-dlp нашёл его без
-    системной установки. Лениво и мягко: None если пакет/бинарь недоступны."""
+    """Каталог с ffmpeg+ffprobe для yt-dlp (нарезка/склейка реально требуют ОБА бинаря).
+
+    Порядок: env KOZ_FFMPEG_DIR -> ffmpeg в PATH -> AppData\\Programs\\ffmpeg\\bin ->
+    bundled imageio_ffmpeg (только ffmpeg, без ffprobe — крайний фолбэк). Возвращает
+    КАТАЛОГ (чтобы yt-dlp нашёл и ffmpeg, и ffprobe) либо путь к bundled-бинарю, либо None.
+    """
+    import shutil
+
+    candidates = []
+    env_dir = os.environ.get("KOZ_FFMPEG_DIR")
+    if env_dir:
+        candidates.append(env_dir)
+    which = shutil.which("ffmpeg")
+    if which:
+        candidates.append(os.path.dirname(which))
+    candidates.append(
+        os.path.join(os.path.expanduser("~"), "AppData", "Local", "Programs", "ffmpeg", "bin")
+    )
+    for d in candidates:
+        if not d:
+            continue
+        win = os.path.exists(os.path.join(d, "ffmpeg.exe")) and os.path.exists(
+            os.path.join(d, "ffprobe.exe")
+        )
+        nix = os.path.exists(os.path.join(d, "ffmpeg")) and os.path.exists(
+            os.path.join(d, "ffprobe")
+        )
+        if win or nix:
+            return d
     try:
         import imageio_ffmpeg
 
@@ -70,7 +98,12 @@ def sample_frames(media_path: str) -> list:
             if not ok:
                 break
             out = f"{base}_frame{i}.png"
-            cv2.imwrite(out, img)
+            # Unicode-safe запись: cv2.imwrite НЕ умеет пути с кириллицей на Windows
+            # (а репозиторий лежит в …\Документы\…). imencode+tofile пишет через Python.
+            ok2, buf = cv2.imencode(".png", img)
+            if not ok2:
+                continue
+            buf.tofile(out)
             frames.append(out)
         cap.release()
         return frames
@@ -164,9 +197,21 @@ def _ytdlp_download(url: str):
         }
         ffmpeg_loc = _ffmpeg_location()
         if ffmpeg_loc:
-            # yt-dlp использует ffmpeg для merge/постобработки; берём bundled бинарь
-            # из imageio_ffmpeg, если системного нет.
+            # yt-dlp использует ffmpeg/ffprobe для нарезки/склейки.
             opts["ffmpeg_location"] = ffmpeg_loc
+            # Надёжно: добавляем каталог ffmpeg в PATH (yt-dlp не всегда подхватывает
+            # ffmpeg_location-каталог для проверки доступности при нарезке).
+            if os.path.isdir(ffmpeg_loc) and ffmpeg_loc not in os.environ.get("PATH", ""):
+                os.environ["PATH"] = ffmpeg_loc + os.pathsep + os.environ.get("PATH", "")
+            # ПРОДУКТ: разбираем первые ~90 сек (достаточно для рекламы/скам-воронки) —
+            # кратно быстрее на CPU. Нарезка требует ffmpeg, поэтому только при наличии.
+            try:
+                opts["download_ranges"] = yt_dlp.utils.download_range_func(
+                    None, [(0.0, _MAX_VIDEO_SECONDS)]
+                )
+                opts["force_keyframes_at_cuts"] = True
+            except Exception:
+                pass
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
             media_path = ydl.prepare_filename(info)

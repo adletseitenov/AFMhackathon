@@ -204,7 +204,7 @@ def analyze_client(tmp_path, monkeypatch):
     monkeypatch.setattr(fetch_mod, "fetch_post",
                         lambda url=None, upload=None: fake_post)
     monkeypatch.setattr(pipeline_mod, "extract",
-                        lambda post, use_cache=True: fake_extracted)
+                        lambda post, use_cache=True, progress=None: fake_extracted)
 
     def _fake_score_post(post, extracted, conn=None):
         # имитируем персист реального score_post (upsert + audit)
@@ -226,10 +226,27 @@ def analyze_client(tmp_path, monkeypatch):
         yield c
 
 
+def _wait_job(client, job_id, timeout=10.0):
+    """Опрашивает /api/jobs/{id} до done/error (анализ идёт в фоновом потоке)."""
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        j = client.get(f"/api/jobs/{job_id}").json()
+        if j["status"] in ("done", "error"):
+            return j
+        time.sleep(0.02)
+    return client.get(f"/api/jobs/{job_id}").json()
+
+
 def test_analyze_url_returns_scored_result(analyze_client):
+    # /api/analyze теперь ставит фоновую задачу и возвращает job_id (async-контракт).
     resp = analyze_client.post("/api/analyze", json={"url": "http://x"})
     assert resp.status_code == 200
-    data = resp.json()
+    job_id = resp.json()["job_id"]
+    job = _wait_job(analyze_client, job_id)
+    assert job["status"] == "done", job
+    data = job["result"]
     assert data["post"]["id"] == "live1"
     assert data["score"]["risk"] == 91
     assert data["score"]["category"] == "pyramid"
@@ -239,8 +256,10 @@ def test_analyze_url_returns_scored_result(analyze_client):
 
 
 def test_analyze_persists_and_reveals(analyze_client):
-    """После анализа пост попадает в ленту (revealed=1 + scores-строка)."""
-    analyze_client.post("/api/analyze", json={"url": "http://x"})
+    """После анализа (задача завершилась) пост попадает в ленту (revealed=1 + score)."""
+    resp = analyze_client.post("/api/analyze", json={"url": "http://x"})
+    job = _wait_job(analyze_client, resp.json()["job_id"])
+    assert job["status"] == "done", job
     feed = analyze_client.get("/api/feed").json()
     ids = [r["post"]["id"] for r in feed]
     assert "live1" in ids

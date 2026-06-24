@@ -33,6 +33,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 import app.decision.scoring as scoring_mod
 import app.extractors.pipeline as pipeline_mod
 import app.ingestion.fetch as fetch_mod
+import app.jobs.worker as jobs
 from app import config, db
 from app.decision.explain import explain
 from app.models import Extracted, FeatureHit, Post, Score
@@ -154,17 +155,15 @@ def api_tick(request: Request):
 
 @router.post("/api/analyze")
 async def api_analyze(request: Request):
-    """Live-проверка: JSON {url} ИЛИ multipart file (§0.5/§0.7).
+    """Live-проверка по ссылке/файлу. Тяжёлый разбор видео (yt-dlp + Whisper + OCR +
+    CLIP) идёт в ФОНЕ через очередь задач: сразу возвращаем job_id, прогресс/результат —
+    через GET /api/jobs/{id}. Тело: JSON {url} ИЛИ multipart file (§0.5/§0.7).
 
-    Тело разбираем вручную по Content-Type, чтобы один роут принимал и JSON-ссылку,
-    и multipart-файл (FastAPI не смешивает Body+File в одной сигнатуре без формы).
-
-    Тяжёлый путь (yt-dlp/whisper/ocr/clip) деградирует мягко: при сбое fetch/extract
-    скорим то, что есть, и возвращаем `note`, а не роняем запрос 500-кой.
+    Ошибки тяжёлого пути НЕ роняют запрос 500-кой: они либо мягко деградируют (скорим
+    доступный текст + note), либо становятся статусом задачи 'error'.
     """
     url = None
     upload = None
-    note = None
 
     ctype = (request.headers.get("content-type") or "").lower()
     if "multipart/form-data" in ctype:
@@ -184,61 +183,60 @@ async def api_analyze(request: Request):
             url = payload.get("url") or None
 
     if not url and upload is None:
-        raise HTTPException(
-            status_code=400, detail="нужна ссылка (url) или файл (file)"
-        )
+        raise HTTPException(status_code=400, detail="нужна ссылка (url) или файл (file)")
 
-    conn = request.app.state.db
+    def _run(report):
+        note = None
+        report("получение медиа", 8)
+        # 1) fetch — Post (yt-dlp/файл). Деградация: минимальный Post по ссылке.
+        try:
+            post = fetch_mod.fetch_post(url=url, upload=upload)
+        except Exception as exc:
+            note = f"Не удалось получить медиа ({exc}); анализ по доступным данным."
+            post = Post(
+                id=uuid.uuid4().hex,
+                platform="link" if url else "upload",
+                author_handle="",
+                url=url or "upload://unknown",
+                caption="",
+                posted_at=datetime.now(timezone.utc).isoformat(),
+                media_path=None, thumb_url=None, source="live",
+            )
+        # 2) extract — реальные мультимодальные признаки с прогрессом (15..80%).
+        try:
+            extracted = pipeline_mod.extract(
+                post, use_cache=False,
+                progress=lambda s, p: report(s, 15 + int(max(0, min(100, p)) * 0.65)),
+            )
+        except Exception as exc:
+            note = (note + " " if note else "") + f"Тяжёлые экстракторы недоступны ({exc}); скоринг по тексту."
+            cap = post.caption or ""
+            extracted = Extracted(
+                post_id=post.id, caption=cap, transcript="", ocr_text="",
+                visual_concepts=[], combined_text=cap, entities=[],
+            )
+        # 3) скоринг своей моделью + персист (своё соединение — мы в worker-потоке).
+        report("скоринг своей моделью", 88)
+        wconn = db.connect()
+        try:
+            score = scoring_mod.score_post(post, extracted, conn=wconn)
+            action = scoring_mod.recommend_action(score.risk)
+            db.insert_post(wconn, post)
+            db.upsert_extracted(wconn, extracted)
+            db.reveal_post(wconn, post.id)
+        finally:
+            wconn.close()
+        result = {
+            "post_id": post.id,
+            "post": asdict(post),
+            "extracted": asdict(extracted),
+            "score": asdict(score),
+            "explanation": explain(score, extracted.entities),
+            "recommended_action": action,
+        }
+        if note:
+            result["note"] = note
+        return result
 
-    # 1) fetch — собрать Post (yt-dlp/файл). Деградация: минимальный Post по ссылке.
-    try:
-        post = fetch_mod.fetch_post(url=url, upload=upload)
-    except Exception as exc:  # тяжёлый путь недоступен — не роняем запрос
-        note = f"Не удалось получить медиа ({exc}); анализ по доступным данным."
-        post = Post(
-            id=uuid.uuid4().hex,
-            platform="link" if url else "upload",
-            author_handle="",
-            url=url or "upload://unknown",
-            caption="",
-            posted_at=datetime.now(timezone.utc).isoformat(),
-            media_path=None,
-            thumb_url=None,
-            source="live",
-        )
-
-    # 2) extract — мультимодальные признаки. Деградация: пустой Extracted из caption.
-    try:
-        extracted = pipeline_mod.extract(post, use_cache=False)
-    except Exception as exc:
-        note = (note + " ") if note else ""
-        note += f"Тяжёлые экстракторы недоступны ({exc}); скоринг по тексту."
-        cap = post.caption or ""
-        extracted = Extracted(
-            post_id=post.id, caption=cap, transcript="", ocr_text="",
-            visual_concepts=[], combined_text=cap, entities=[],
-        )
-
-    # 3-4) скоринг своей моделью + персист поста. Контролируемая 503 вместо
-    # неперехваченной 500 — контракт роута: не ронять запрос.
-    try:
-        score = scoring_mod.score_post(post, extracted, conn=conn)
-        action = scoring_mod.recommend_action(score.risk)
-        db.insert_post(conn, post)
-        db.upsert_extracted(conn, extracted)
-        db.reveal_post(conn, post.id)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"скоринг недоступен: {exc}")
-
-    result = {
-        "post": asdict(post),
-        "extracted": asdict(extracted),
-        "score": asdict(score),
-        "explanation": explain(score, extracted.entities),
-        "recommended_action": action,
-    }
-    if note:
-        result["note"] = note
-    return result
+    job_id = jobs.run_job("analyze", _run)
+    return {"job_id": job_id, "status": "queued"}

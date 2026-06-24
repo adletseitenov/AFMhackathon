@@ -37,10 +37,19 @@ def ocr_frames(frames: "list | None") -> str:
     reader = _load_reader()
     if reader is None:
         return ""
+    # Unicode-safe чтение: easyocr внутри использует cv2.imread, который НЕ читает
+    # пути с кириллицей на Windows (репозиторий в …\Документы\…). Читаем кадр сами
+    # через np.fromfile+imdecode и передаём numpy-массив в readtext.
+    import cv2
+    import numpy as np
+
     chunks: list = []
     for frame in frames:
         try:
-            for line in reader.readtext(frame, detail=0):
+            img = cv2.imdecode(np.fromfile(frame, dtype=np.uint8), cv2.IMREAD_COLOR)
+            if img is None:
+                continue
+            for line in reader.readtext(img, detail=0):
                 chunks.append(line)
         except Exception:
             continue
