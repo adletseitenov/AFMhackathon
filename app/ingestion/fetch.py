@@ -217,6 +217,7 @@ def _ytdlp_download(url: str):
         js_rt = _js_runtimes()
         if js_rt:
             opts["js_runtimes"] = js_rt
+        opts.update(_cookie_opts())  # cookies для Instagram/закрытых площадок (если заданы в env)
         ffmpeg_loc = _ffmpeg_location()
         if ffmpeg_loc:
             # yt-dlp использует ffmpeg/ffprobe для нарезки/склейки.
@@ -267,12 +268,45 @@ def fetch_link(url: str):
     return media_path, frames, meta
 
 
+_COOKIE_BROWSERS = {
+    "chrome", "chromium", "firefox", "edge", "brave", "opera", "vivaldi", "safari",
+}
+
+
+def _cookie_opts() -> dict:
+    """yt-dlp cookie-опции для авторизованных площадок (Instagram режет аноним).
+
+    Instagram (и местами TikTok) НЕ отдают публичный автопоиск без входа. Чтобы
+    автопоиск по ним заработал, нужны cookies авторизованной сессии. Источник —
+    ТОЛЬКО переменные окружения (никаких секретов в репозитории):
+      KOZ_COOKIES_FROM_BROWSER=chrome|firefox|edge|brave|...  -> yt-dlp читает cookies
+        прямо из браузера (достаточно быть залогиненным в Instagram в этом браузере);
+      KOZ_COOKIES_FILE=<путь к cookies.txt>  -> файл cookies в формате Netscape
+        (экспорт расширением «Get cookies.txt» из залогиненного браузера).
+    Если ничего не задано -> {} (аноним -> логин-вол -> честная нота, как раньше).
+    cookiesfrombrowser имеет приоритет над cookiefile.
+    """
+    browser = os.environ.get("KOZ_COOKIES_FROM_BROWSER", "").strip().lower()
+    if browser in _COOKIE_BROWSERS:
+        return {"cookiesfrombrowser": (browser,)}
+    cfile = os.environ.get("KOZ_COOKIES_FILE", "").strip()
+    if cfile and os.path.isfile(cfile):
+        return {"cookiefile": cfile}
+    return {}
+
+
+def cookies_configured() -> bool:
+    """True, если задан источник cookies (вход для Instagram/закрытых площадок)."""
+    return bool(_cookie_opts())
+
+
 def _ydl_meta_opts() -> dict:
     """Опции yt-dlp для извлечения МЕТАДАННЫХ без скачивания медиа."""
     opts = {"quiet": True, "noplaylist": True, "no_warnings": True, "skip_download": True}
     js_rt = _js_runtimes()
     if js_rt:
         opts["js_runtimes"] = js_rt
+    opts.update(_cookie_opts())  # cookies для Instagram/закрытых площадок (если заданы в env)
     return opts
 
 

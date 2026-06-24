@@ -641,8 +641,16 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
                 "Это нормально — попробуйте позже либо переключитесь на VOD/посты.")
     elif do_video_platform and platform_added == 0:
         if platform == "instagram":
-            note = ("Instagram не отдаёт публичный автопоиск без входа. "
-                    "Используйте «Живую проверку» ссылки на reel, либо TikTok/YouTube/Telegram.")
+            if getattr(fetch_mod, "cookies_configured", lambda: False)():
+                note = ("Вход в Instagram (cookies) включён, но постов не найдено — проверьте, что вы "
+                        "залогинены в Instagram в выбранном браузере, либо у этих аккаунтов нет новых постов.")
+            else:
+                note = ("Instagram не отдаёт публичный автопоиск без входа. Чтобы включить — добавьте "
+                        "cookies авторизованной сессии: экспортируйте cookies.txt (расширение «Get "
+                        "cookies.txt LOCALLY», будучи залогиненным в Instagram) и задайте "
+                        "KOZ_COOKIES_FILE=<путь>; либо KOZ_COOKIES_FROM_BROWSER=firefox. Затем "
+                        "перезапустите сервер. (Вход через Chrome на Windows недоступен — App-Bound "
+                        "шифрование cookies.) Либо «Живая проверка» ссылки на reel / TikTok / YouTube.")
         elif platform_accounts_ok > 0:
             # Видео нашлись, но все уже в ленте — это НЕ сбой, а дедуп.
             note = (f"Новых постов нет: все {platform_found} найденных роликов уже в ленте — "
