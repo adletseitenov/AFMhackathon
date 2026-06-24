@@ -25,6 +25,7 @@ db.connect() и закрываем в finally (§0.2); если conn перед�
 import json
 
 from app import config, db
+from app.decision.licensed import licensed_operators
 
 
 def _post_node_id(post_id: str) -> str:
@@ -51,7 +52,7 @@ def _build_graph_with_conn(conn, post_ids: list[str]) -> dict:
 
     for post_id in post_ids:
         row = conn.execute(
-            "SELECT entities_json FROM extracted WHERE post_id = ?", (post_id,)
+            "SELECT entities_json, combined_text FROM extracted WHERE post_id = ?", (post_id,)
         ).fetchone()
         if row is None:
             # нет извлечённых данных для поста — пропускаем без падения
@@ -62,8 +63,23 @@ def _build_graph_with_conn(conn, post_ids: list[str]) -> dict:
         ).fetchone()
         risk = int(score_row["risk"]) if score_row is not None else 0
 
+        # Флаг «разрешён в РК»: лицензированный оператор по подписи + аккаунту + тексту
+        # (оператор часто = сам аккаунт, напр. @olimpbet). Риск НЕ меняем — только метка.
+        prow = conn.execute(
+            "SELECT caption, author_handle FROM posts WHERE id = ?", (post_id,)
+        ).fetchone()
+        lic_text = " ".join(
+            x for x in (
+                (prow["caption"] if prow else "") or "",
+                (prow["author_handle"] if prow else "") or "",
+                row["combined_text"] or "",
+            ) if x
+        )
+        lic_ops = licensed_operators(lic_text)
+
         pid = _post_node_id(post_id)
-        nodes[pid] = {"id": pid, "label": post_id, "type": "post", "risk": risk}
+        nodes[pid] = {"id": pid, "label": post_id, "type": "post", "risk": risk,
+                      "licensed": bool(lic_ops), "licensed_operators": lic_ops}
 
         entities = json.loads(row["entities_json"]) if row["entities_json"] else []
         for ent in entities:
@@ -71,11 +87,15 @@ def _build_graph_with_conn(conn, post_ids: list[str]) -> dict:
                 continue  # пропускаем малформ-записи без падения (как в trends.py)
             eid = _entity_node_id(ent)
             if eid not in nodes:
+                ent_label = ent.get("value") or ent.get("normalized") or ""
+                ent_lic = licensed_operators(ent_label)
                 nodes[eid] = {
                     "id": eid,
-                    "label": ent.get("value") or ent.get("normalized") or "",
+                    "label": ent_label,
                     "type": ent.get("type"),
                     "risk": 0,
+                    "licensed": bool(ent_lic),
+                    "licensed_operators": ent_lic,
                 }
             # узел-сущность наследует макс. риск инцидентных постов (кластер)
             nodes[eid]["risk"] = max(nodes[eid]["risk"], risk)

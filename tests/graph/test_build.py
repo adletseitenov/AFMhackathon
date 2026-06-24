@@ -207,3 +207,31 @@ def test_post_without_score_defaults_risk_zero(fresh_db):
     post_node = next(n for n in graph["nodes"] if n["id"] == "post:p1")
     assert post_node["risk"] == 0
     assert post_node["high_risk"] is False
+
+
+# --- Флаг «разрешён в РК» (лицензированный оператор) на узлах графа ---
+
+def test_licensed_operator_marked_on_post_and_entity_nodes(fresh_db):
+    conn = fresh_db
+    # пост от ЛИЦЕНЗИРОВАННОГО аккаунта (@olimpbet) + entity-бренд Olimpbet
+    _insert_post(conn, "olimpbet")  # author_handle="@olimpbet"
+    _insert_score(conn, "olimpbet", 80)
+    _insert_extracted(conn, "olimpbet",
+                      [{"type": "betting_brand", "value": "Olimpbet", "normalized": "olimpbet"}])
+    # НЕлицензированный пост для контраста
+    _insert_post(conn, "shill1")
+    _insert_score(conn, "shill1", 90)
+    _insert_extracted(conn, "shill1",
+                      [{"type": "betting_brand", "value": "mostbet", "normalized": "mostbet"}])
+
+    g = build_graph(["olimpbet", "shill1"], conn=conn)
+    by_label = {n["label"]: n for n in g["nodes"]}
+
+    # post-узел лицензированного аккаунта помечен
+    assert by_label["olimpbet"]["licensed"] is True
+    assert "Olimpbet" in by_label["olimpbet"]["licensed_operators"]
+    # entity-бренд Olimpbet помечен, mostbet — нет
+    assert by_label["Olimpbet"]["licensed"] is True
+    assert by_label["mostbet"]["licensed"] is False
+    # риск НЕ занижается флагом
+    assert by_label["olimpbet"]["risk"] == 80

@@ -666,15 +666,26 @@ function kozApp() {
         const nodes = g.nodes.map((n) => {
           const isPost = n.type === "post";
           const pal = RISK_PALETTE[riskTier(n.risk || 0)];
+          const lic = !!n.licensed;  // лицензированный в РК оператор — зелёная обводка + ✓
+          const base = isPost
+            ? { background: pal.net, border: pal.tx, highlight: { background: pal.net, border: "#111111" } }
+            : { background: "#FFFFFF", border: "#C9C9C7", highlight: { background: "#F1F1EF", border: "#787774" } };
+          if (lic) {
+            base.border = "#346538";
+            base.highlight = { background: base.background, border: "#346538" };
+          }
+          const ops = (n.licensed_operators || []).join(", ");
           return {
             id: n.id,
-            label: n.label,
+            label: (lic ? "✓ " : "") + n.label,
             shape: isPost ? "dot" : "box",
             size: isPost ? 12 + Math.round((n.risk || 0) / 6) : 10,
-            color: isPost
-              ? { background: pal.net, border: pal.tx, highlight: { background: pal.net, border: "#111111" } }
-              : { background: "#FFFFFF", border: "#C9C9C7", highlight: { background: "#F1F1EF", border: "#787774" } },
+            color: base,
+            borderWidth: lic ? 3 : 1.5,
             font: { color: isPost ? "#111111" : "#787774", size: 12, face: "Geist Sans, system-ui, sans-serif" },
+            title: lic
+              ? "Разрешён в РК" + (ops ? ": " + ops : "") + " — блокировка не требуется, проверить рекламные нормы"
+              : undefined,
             _post: isPost ? n.id.replace(/^post:/, "") : null,
           };
         });
