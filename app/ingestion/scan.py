@@ -28,13 +28,22 @@ from app.models import Extracted
 
 # t.me-ссылки в тексте сообщений: каналы/чаты по имени (t.me/<name>, t.me/s/<name>)
 # и приватные ИНВАЙТЫ в чаты (t.me/+<hash>, t.me/joinchat/<hash>) — для снежного кома.
-_TME_LINK_RE = re.compile(r"t\.me/(s/)?(\+?[A-Za-z0-9_]{3,40}|joinchat/[A-Za-z0-9_\-]+)", re.I)
+# ВАЖНО: альтернатива joinchat/<hash> идёт ПЕРВОЙ — иначе общий username-паттерн
+# затеняет её и ловит «joinchat» как канал вместо инвайт-ссылки на чат.
+_TME_LINK_RE = re.compile(r"t\.me/(s/)?(joinchat/[A-Za-z0-9_\-]+|\+?[A-Za-z0-9_]{3,40})", re.I)
 # Служебные пути t.me, которые не являются каналом/чатом.
 _TME_STOP = {"s", "share", "addstickers", "addemoji", "proxy", "iv", "setlanguage",
              "socks", "login", "confirmphone", "bg", "contact"}
 # Признаки ЧАТА/группы в username (казино-каналы линкуют свои чаты: @x_chat,
-# @x_chatters, @x_obsuzhdenie). Такой username — и сканируем, и помечаем как чат-лид.
-_CHAT_HINT = re.compile(r"(chat|chatter|group|talk|discus|обсужд|чат|болтал|flud|флуд)", re.I)
+# @x_chatters, @x_obsuzhdenie, @x_besedka, @x_obshenie). Такой username — и сканируем,
+# и помечаем как чат-лид. Покрываем RU/KZ/EN и транслит казахстанских чат-групп.
+_CHAT_HINT = re.compile(
+    r"(chat|chatter|group|talk|discus|обсужд|obsuzhd|чат|chatik|чатик|"
+    r"болтал|болталк|flud|флуд|флудилк|fludilk|"
+    r"беседа|беседк|beseda|besedk|комьюнити|community|общени|obsheni|общалк|obshalk|"
+    r"форум|forum|трёп|трем|sohbet|сохбет|пікірталас|курилк|kurilk)",
+    re.I,
+)
 
 
 def _links_from_text(text: str, channels: set, chats: set) -> None:

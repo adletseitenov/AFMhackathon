@@ -96,3 +96,26 @@ def test_scan_snowballs_channels_and_chats_from_links(tmp_path, monkeypatch):
     assert "promo_channel_2" in res["discovered_channels"]
     assert any("+" in c or "joinchat/" in c for c in res["discovered_chats"])
     assert "seed" not in res["discovered_channels"]  # сам сид не возвращаем
+
+
+def test_links_from_text_classifies_chats_channels_and_invites():
+    """Определение TG-чатов: приватные инвайты (+hash / joinchat) и username с
+    чат-признаком (RU/KZ/EN: chat / беседка / общалка / форум / флудилка / курилка /
+    sohbet) -> чаты-лиды; обычные каналы -> channels; служебные t.me-пути отсеяны."""
+    channels, chats = set(), set()
+    text = (
+        "Канал t.me/casino_promo_kz, обсуждение t.me/casino_chat_kz, "
+        "беседка t.me/slots_besedka, общалка t.me/win_obshalka, "
+        "форум t.me/invest_forum, флудилка t.me/bonus_fludilka, "
+        "курилка t.me/ludoman_kurilka, sohbet t.me/casino_sohbet, "
+        "приватный t.me/+AbCdEf12345 и t.me/joinchat/XyZ987, "
+        "служебное t.me/share/url и t.me/addstickers/pack"
+    )
+    scan._links_from_text(text, channels, chats)
+    assert "+AbCdEf12345" in chats
+    assert any("joinchat/" in c for c in chats)
+    for c in ("casino_chat_kz", "slots_besedka", "win_obshalka", "invest_forum",
+              "bonus_fludilka", "ludoman_kurilka", "casino_sohbet"):
+        assert c in chats, f"{c} должен быть распознан как TG-чат"
+    assert "casino_promo_kz" in channels and "casino_promo_kz" not in chats
+    assert "share" not in channels and "addstickers" not in channels
