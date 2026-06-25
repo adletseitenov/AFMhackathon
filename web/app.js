@@ -1121,6 +1121,18 @@ function kozApp() {
         : [];
     },
 
+    // Правовое основание кейса (GET /api/post -> legal_basis): статьи закона РК
+    // + наказание + законный путь мер. {category_ru, articles:[{code,article,
+    // title,summary,punishment}], enforcement:[str], disclaimer}. Пусто -> null.
+    get legalBasis() {
+      const lb = this.detail && this.detail.legal_basis;
+      if (!lb || !Array.isArray(lb.articles)) return null;
+      // Показываем блок, только если есть статьи ИЛИ конкретные шаги мер.
+      const hasArticles = lb.articles.length > 0;
+      const hasSteps = Array.isArray(lb.enforcement) && lb.enforcement.length > 0;
+      return (hasArticles || hasSteps) ? lb : null;
+    },
+
     _chart(id, config) {
       const el = document.getElementById(id);
       if (!el) return;

@@ -957,6 +957,53 @@
                 </ul>
               </div>
 
+              <!-- ═══ Правовое основание — статьи закона РК + наказание + законный путь ═══
+                   detail.legal_basis: {category_ru, articles:[{code,article,title,
+                   summary,punishment}], enforcement:[str], disclaimer}. -->
+              <div x-show="legalBasis" x-cloak>
+                <div class="flex items-center gap-2 mb-2.5">
+                  <i class="ph ph-scales text-[15px] text-ink"></i>
+                  <h3 class="section-h !mb-0">Правовое основание</h3>
+                  <span class="text-[11px] text-muted normal-case font-normal tracking-normal" x-text="legalBasis && legalBasis.category_ru"></span>
+                </div>
+
+                <!-- статьи закона: код + статья + суть + наказание -->
+                <ul class="space-y-2" x-show="legalBasis && legalBasis.articles.length">
+                  <template x-for="(art, i) in (legalBasis ? legalBasis.articles : [])" :key="i">
+                    <li class="rounded-card border border-line bg-canvas px-4 py-3">
+                      <div class="flex items-center gap-2 flex-wrap">
+                        <span class="badge-chip border shrink-0" style="background:#F4EEF8;color:#5B3B86;border-color:#E0D2EE">
+                          <span x-text="art.code"></span> <span x-text="art.article"></span>
+                        </span>
+                        <span class="text-[13px] font-semibold tracking-tight leading-snug" x-text="art.title"></span>
+                      </div>
+                      <p class="text-[12px] text-muted leading-snug mt-1.5" x-show="art.summary" x-text="art.summary"></p>
+                      <div class="rounded-soft border border-line bg-surface px-3 py-2 mt-2 flex items-start gap-2" x-show="art.punishment">
+                        <i class="ph ph-gavel text-[14px] text-ink mt-px shrink-0"></i>
+                        <span class="text-[12px] text-ink"><span class="font-medium">Наказание:</span> <span x-text="art.punishment"></span></span>
+                      </div>
+                    </li>
+                  </template>
+                </ul>
+
+                <!-- законный путь мер (порядок реагирования) -->
+                <div class="rounded-card border border-line bg-canvas px-4 py-3 mt-2" x-show="legalBasis && legalBasis.enforcement.length">
+                  <div class="flex items-center gap-2 mb-2">
+                    <i class="ph ph-list-checks text-[14px] text-ink"></i>
+                    <span class="text-[12px] font-semibold tracking-tight">Законный путь реагирования</span>
+                  </div>
+                  <ol class="space-y-1.5 list-decimal pl-5">
+                    <template x-for="(step, i) in (legalBasis ? legalBasis.enforcement : [])" :key="i">
+                      <li class="text-[12px] text-ink leading-snug" x-text="step"></li>
+                    </template>
+                  </ol>
+                </div>
+
+                <p class="mt-2 flex items-start gap-1.5 text-[11px] text-muted" x-show="legalBasis && legalBasis.disclaimer">
+                  <i class="ph ph-info text-[12px] mt-px shrink-0"></i><span x-text="legalBasis && legalBasis.disclaimer"></span>
+                </p>
+              </div>
+
               <!-- ═══ Вердикт аналитика — метка для дообучения модели ═══ -->
               <div class="rounded-card border border-line bg-canvas px-4 py-3">
                 <div class="flex items-center gap-2 mb-2.5">

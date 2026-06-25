@@ -413,7 +413,8 @@ def test_post_detail_shape(detail_client):
     data = resp.json()
     assert set(data.keys()) == {
         "post", "extracted", "score", "explanation", "recommended_action",
-        "licensed_note", "licensed_disclaimer", "case_recommendations", "graph"}
+        "licensed_note", "licensed_disclaimer", "case_recommendations",
+        "legal_basis", "graph"}
     # граф-связи (эго-сеть) для мини-граф на странице анализа.
     assert set(data["graph"].keys()) == {"nodes", "edges"}
     assert isinstance(data["graph"]["nodes"], list) and isinstance(data["graph"]["edges"], list)
@@ -423,6 +424,13 @@ def test_post_detail_shape(detail_client):
     for r in data["case_recommendations"]:
         assert {"title", "rationale", "action", "priority", "evidence"}.issubset(r)
         assert r["priority"] in {"high", "medium", "low"}
+    # legal_basis: статьи закона РК + наказание + законный путь мер (gambling/p1).
+    lb = data["legal_basis"]
+    assert {"category", "category_ru", "articles", "enforcement", "disclaimer"} <= set(lb)
+    assert isinstance(lb["articles"], list) and len(lb["articles"]) >= 1
+    for a in lb["articles"]:
+        assert {"code", "article", "title", "summary", "punishment"} <= set(a)
+    assert isinstance(lb["enforcement"], list) and len(lb["enforcement"]) >= 1
     assert data["post"]["id"] == "p1"
     assert data["extracted"]["ocr_text"] == "OCR казино"
     assert data["extracted"]["visual_concepts"][0]["label"] == "casino"

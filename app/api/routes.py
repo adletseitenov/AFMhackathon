@@ -37,6 +37,7 @@ import app.jobs.worker as jobs
 from app import config, db
 from app.analytics.recommend import recommendations_for_post
 from app.decision.explain import explain
+from app.decision.legal import legal_basis
 from app.decision.licensed import (
     COMPLIANCE_HINT,
     REGISTRY_DISCLAIMER,
@@ -342,6 +343,12 @@ def api_post_detail(request: Request, post_id: str):
     # risk/score/recommended_action НЕ меняем — это отдельное доп. поле.
     case_recs = recommendations_for_post(conn, post_dict, score)
 
+    # ПРАВОВОЕ ОСНОВАНИЕ: статьи закона РК + наказание + законный путь мер по
+    # категории кейса (gambling/pyramid/fraud). Для лицензированного гемблинга —
+    # «рекламный» режим без уголовных статей. Справочно (критерий №2, без LLM).
+    cat = score.category if score is not None else ""
+    legal = legal_basis(cat, licensed=is_licensed)
+
     # Граф-связи (эго-сеть) для мини-граф на странице анализа: сам пост, его
     # сущности и со-посты, делящие сущность. Используем то же соединение (conn
     # НЕ закрывается). Сбой графа НИКОГДА не роняет drill-down 500-кой.
@@ -361,6 +368,8 @@ def api_post_detail(request: Request, post_id: str):
         "licensed_disclaimer": REGISTRY_DISCLAIMER if is_licensed else "",
         # Точечные рекомендации именно для этого кейса (2-5, отсортированы по важности).
         "case_recommendations": case_recs,
+        # Правовое основание: статьи закона РК + наказание + законный путь мер.
+        "legal_basis": legal,
         # Граф-связи (эго-сеть) поста для мини-граф на странице анализа.
         "graph": graph,
     }
