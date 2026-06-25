@@ -327,7 +327,12 @@ def _ingest_one_live(conn, platform: str, info, fallback_handle: str, seen_urls:
     author = (info.get("author_handle") or fallback_handle or "").lstrip("@")
     title = info.get("title") or info.get("description") or ""
     cap = normalize(title)
-    score_text = normalize(f"{author} {title}".strip())
+    # Контекст категории: стрим найден в ГЕМБЛИНГ-категории площадки (Twitch Slots/
+    # Virtual Casino, Kick «слоты/казино») — это фактический сигнал, что контент
+    # азартный, даже если в заголовке нет явных ключевых слов. Добавляем к скорингу,
+    # чтобы анализатор корректно квалифицировал live-стрим как гемблинг.
+    cat_ctx = info.get("category_context") or ""
+    score_text = normalize(f"{author} {title} {cat_ctx}".strip())
     post = Post(
         id=pid, platform=platform, author_handle=author,
         url=url, caption=cap,

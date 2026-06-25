@@ -348,6 +348,8 @@ def search_kick_live(terms=None, per_term: int = 5, max_live: int = 6) -> list:
             seen.add(slug)
             info = _fetch_live_kick(slug)  # подтверждает эфир + полные данные
             if info:
+                # канал найден по гемблинг-запросу -> контекст категории для скоринга
+                info["category_context"] = "казино слоты ставки гемблинг стрим"
                 out.append(info)
     return out
 
@@ -413,5 +415,7 @@ def search_twitch_live(categories=None, per_category: int = 6, max_live: int = 6
                 "thumb_url": "",
                 "view_count": _int_or_zero(node.get("viewersCount")),
                 "live": True,
+                # стрим найден в ГЕМБЛИНГ-категории Twitch -> контекст для скоринга
+                "category_context": f"{cat} казино слоты ставки гемблинг стрим",
             })
     return out
