@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from functools import lru_cache
 
 # --- Невидимые символы / нулевой ширины (вырезаем полностью) ---
 # ZWSP, ZWNJ, ZWJ, BOM/ZWNBSP, soft-hyphen, LRM/RLM, word-joiner.
@@ -181,9 +182,19 @@ def normalize_obfuscated(text) -> str:
       6) схлопывание повторных пробелов.
 
     Idempotent и crash-safe.
+
+    ПРОИЗВОДИТЕЛЬНОСТЬ: тяжёлую (regex-насыщенную) часть кэшируем через lru_cache —
+    функция чистая/идемпотентная, а в hot-path (построение графа, скоринг) один и тот
+    же текст (подписи, метки сущностей, бренды) нормализуется многократно. Guard
+    None/нестроки оставлен ВНЕ кэша, чтобы нехешируемый вход не падал на lru_cache.
     """
     if not text or not isinstance(text, str):
         return ""
+    return _normalize_cached(text)
+
+
+@lru_cache(maxsize=8192)
+def _normalize_cached(text: str) -> str:
     try:
         t = unicodedata.normalize("NFKC", text)
         t = _strip_zero_width(t)

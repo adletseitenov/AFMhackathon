@@ -741,10 +741,18 @@ function kozApp() {
       const data = { nodes: new vis.DataSet(nodes), edges: new vis.DataSet(edges) };
       const options = {
         interaction: { hover: true, tooltipDelay: 120 },
-        physics: { stabilization: true, barnesHut: { gravitationalConstant: -3500, springLength: 120 } },
+        // ограничиваем итерации стабилизации (по умолчанию 1000) — эго-граф мал, но
+        // нет смысла крутить полную физику; замораживаем сразу после раскладки.
+        physics: {
+          stabilization: { enabled: true, iterations: 200, updateInterval: 25, fit: true },
+          barnesHut: { gravitationalConstant: -3500, springLength: 120 },
+        },
         nodes: { borderWidth: 1.5 },
       };
       this._detailNetwork = new vis.Network(el, data, options);
+      this._detailNetwork.once("stabilizationIterationsDone", () => {
+        try { this._detailNetwork.setOptions({ physics: false }); } catch (_) {}
+      });
 
       this._detailNetwork.on("click", (params) => {
         if (!params.nodes.length) return;
@@ -964,6 +972,12 @@ function kozApp() {
           return;
         }
 
+        // ПРОИЗВОДИТЕЛЬНОСТЬ: при большом графе (>400 узлов) полная силовая
+        // стабилизация vis-network + improvedLayout (Kamada-Kawai, ~O(n^2)) фризят
+        // главный поток на секунды. Для больших графов отключаем дорогой пре-лейаут,
+        // ограничиваем итерации физики и замораживаем её после первичной раскладки.
+        const big = g.nodes.length > 400;
+
         const nodes = g.nodes.map((n) => {
           const isPost = n.type === "post";
           const pal = RISK_PALETTE[riskTier(n.risk || 0)];
@@ -999,17 +1013,29 @@ function kozApp() {
           to: e.target,
           color: { color: "#EAEAEA", highlight: "#787774" },
           width: 1,
-          smooth: { type: "continuous" },
+          // прямые рёбра для больших графов — без дорогих безье на каждое ребро
+          smooth: big ? false : { type: "continuous" },
         }));
 
         const data = { nodes: new vis.DataSet(nodes), edges: new vis.DataSet(edges) };
         const options = {
           interaction: { hover: true, tooltipDelay: 120 },
-          physics: { stabilization: true, barnesHut: { gravitationalConstant: -3500, springLength: 120 } },
+          // improvedLayout (Kamada-Kawai пре-лейаут) ~O(n^2) — для больших графов выкл.
+          layout: { improvedLayout: !big },
+          physics: {
+            // ограничиваем итерации стабилизации (по умолчанию 1000) — главный фриз
+            stabilization: { enabled: true, iterations: big ? 120 : 250, updateInterval: 25, fit: true },
+            barnesHut: { gravitationalConstant: -3500, springLength: 120 },
+          },
           nodes: { borderWidth: 1.5 },
         };
         // экземпляр уже уничтожен в начале loadGraph — создаём свежий
         this._network = new vis.Network(el, data, options);
+        // после первичной стабилизации замораживаем физику — снимаем постоянную
+        // нагрузку CPU (перетаскивание узлов остаётся доступным).
+        this._network.once("stabilizationIterationsDone", () => {
+          try { this._network.setOptions({ physics: false }); } catch (_) {}
+        });
 
         this._network.on("click", (params) => {
           if (!params.nodes.length) return;

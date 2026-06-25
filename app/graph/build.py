@@ -50,24 +50,40 @@ def _build_graph_with_conn(conn, post_ids: list[str]) -> dict:
     nodes: dict[str, dict] = {}
     edges: list[dict] = []
 
+    # ПРОИЗВОДИТЕЛЬНОСТЬ: раньше на КАЖДЫЙ пост шло 3 отдельных запроса (extracted,
+    # scores, posts) — 3×N round-trips. Тянем всё ТРЕМЯ bulk-запросами по списку
+    # post_ids и кладём в dict-ы; дальше — только память. Результат идентичен.
+    if not post_ids:
+        return {"nodes": [], "edges": []}
+    qmarks = ",".join("?" for _ in post_ids)
+    ex_by_id = {
+        r["post_id"]: r for r in conn.execute(
+            f"SELECT post_id, entities_json, combined_text FROM extracted "
+            f"WHERE post_id IN ({qmarks})", tuple(post_ids)
+        ).fetchall()
+    }
+    risk_by_id = {
+        r["post_id"]: int(r["risk"]) for r in conn.execute(
+            f"SELECT post_id, risk FROM scores WHERE post_id IN ({qmarks})", tuple(post_ids)
+        ).fetchall()
+    }
+    post_by_id = {
+        r["id"]: r for r in conn.execute(
+            f"SELECT id, caption, author_handle FROM posts WHERE id IN ({qmarks})", tuple(post_ids)
+        ).fetchall()
+    }
+
     for post_id in post_ids:
-        row = conn.execute(
-            "SELECT entities_json, combined_text FROM extracted WHERE post_id = ?", (post_id,)
-        ).fetchone()
+        row = ex_by_id.get(post_id)
         if row is None:
             # нет извлечённых данных для поста — пропускаем без падения
             continue
 
-        score_row = conn.execute(
-            "SELECT risk FROM scores WHERE post_id = ?", (post_id,)
-        ).fetchone()
-        risk = int(score_row["risk"]) if score_row is not None else 0
+        risk = risk_by_id.get(post_id, 0)
 
         # Флаг «разрешён в РК»: лицензированный оператор по подписи + аккаунту + тексту
         # (оператор часто = сам аккаунт, напр. @olimpbet). Риск НЕ меняем — только метка.
-        prow = conn.execute(
-            "SELECT caption, author_handle FROM posts WHERE id = ?", (post_id,)
-        ).fetchone()
+        prow = post_by_id.get(post_id)
         lic_text = " ".join(
             x for x in (
                 (prow["caption"] if prow else "") or "",
@@ -127,19 +143,34 @@ def build_graph(post_ids: list[str], conn=None) -> dict:
 
 
 def _build_ego_graph_with_conn(conn, post_id: str) -> dict:
-    ego_entity_ids = {_entity_node_id(e) for e in _entities_for(conn, post_id)}
+    # ПРОИЗВОДИТЕЛЬНОСТЬ: раньше это был классический N+1 — SELECT всех post_id, затем
+    # отдельный запрос _entities_for() на КАЖДЫЙ пост (~1107 запросов + 1107 json.loads
+    # на каждое открытие карточки). Заменяем на ОДИН bulk-запрос + инвертированный
+    # индекс entity_id -> {post_id} в памяти (один проход). Результат идентичен:
+    # co-пост делит >=1 сущность с эго-постом <=> встречается в индексе хотя бы одной
+    # его сущности. Малформ-записи пропускаем РОВНО как _build_graph_with_conn (ниже).
+    rows = conn.execute("SELECT post_id, entities_json FROM extracted").fetchall()
 
-    all_post_ids = [
-        r["post_id"] for r in conn.execute("SELECT post_id FROM extracted").fetchall()
-    ]
+    entity_to_posts: dict[str, set[str]] = {}
+    ego_entity_ids: set[str] = set()
+    for r in rows:
+        try:
+            ents = json.loads(r["entities_json"]) if r["entities_json"] else []
+        except (TypeError, ValueError):
+            ents = []
+        ids = set()
+        for ent in ents:
+            if not isinstance(ent, dict) or not ent.get("type"):
+                continue  # пропускаем малформ (как lines 86-87 ниже) — ключ узла не плывёт
+            ids.add(_entity_node_id(ent))
+        if r["post_id"] == post_id:
+            ego_entity_ids = ids
+        for eid in ids:
+            entity_to_posts.setdefault(eid, set()).add(r["post_id"])
 
     co_post_ids = {post_id}
-    for other in all_post_ids:
-        if other == post_id:
-            continue
-        other_ids = {_entity_node_id(e) for e in _entities_for(conn, other)}
-        if ego_entity_ids & other_ids:
-            co_post_ids.add(other)
+    for eid in ego_entity_ids:
+        co_post_ids |= entity_to_posts.get(eid, set())
 
     return _build_graph_with_conn(conn, sorted(co_post_ids))
 

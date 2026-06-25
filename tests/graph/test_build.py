@@ -171,6 +171,61 @@ def test_entity_node_risk_is_max_incident_post_and_flags_high_risk(fresh_db):
     assert p2["high_risk"] is False   # 65 < 70
 
 
+# --- Перф-оптимизация: эго-граф через инвертированный индекс == брутфорс-эталон ---
+
+def _bruteforce_ego_copost_ids(conn, post_id):
+    """Эталон: попарное пересечение множеств сущностей (старый алгоритм N+1)."""
+    import json as _json
+
+    def ent_ids(pid):
+        row = conn.execute(
+            "SELECT entities_json FROM extracted WHERE post_id=?", (pid,)
+        ).fetchone()
+        if row is None or not row["entities_json"]:
+            return set()
+        out = set()
+        for e in _json.loads(row["entities_json"]):
+            if isinstance(e, dict) and e.get("type"):
+                out.add(f"entity:{e.get('type')}:{e.get('normalized') or e.get('value','')}")
+        return out
+
+    ego = ent_ids(post_id)
+    all_ids = [r["post_id"] for r in conn.execute("SELECT post_id FROM extracted").fetchall()]
+    co = {post_id}
+    for other in all_ids:
+        if other != post_id and (ego & ent_ids(other)):
+            co.add(other)
+    return co
+
+
+def test_ego_inverted_index_matches_bruteforce_parity(fresh_db):
+    """Оптимизированный build_ego_graph (bulk-запрос + инвертированный индекс) даёт
+    тот же набор узлов/рёбер, что и попарное пересечение, и на МАЛФОРМ-сущностях."""
+    conn = fresh_db
+    # сеть из общих сущностей + малформ-записи (None/без type) — должны игнорироваться.
+    _insert_post(conn, "a"); _insert_score(conn, "a", 80)
+    _insert_extracted(conn, "a", [
+        {"type": "telegram", "value": "@Net", "normalized": "net"},
+        {"type": "promo_code", "value": "X1", "normalized": "x1"},
+        {"value": "no-type-skip"},          # малформ: без type -> игнор
+        "broken-not-a-dict",                  # малформ: не dict -> игнор
+    ])
+    _insert_post(conn, "b"); _insert_score(conn, "b", 70)
+    _insert_extracted(conn, "b", [{"type": "telegram", "value": "@net", "normalized": "net"}])
+    _insert_post(conn, "c"); _insert_score(conn, "c", 50)
+    _insert_extracted(conn, "c", [{"type": "promo_code", "value": "X1", "normalized": "x1"}])
+    _insert_post(conn, "d"); _insert_score(conn, "d", 10)
+    _insert_extracted(conn, "d", [{"type": "casino_brand", "value": "Other", "normalized": "other"}])
+
+    graph = build_ego_graph("a", conn=conn)
+    post_nodes = {n["id"] for n in graph["nodes"] if n["type"] == "post"}
+    expected = {f"post:{p}" for p in _bruteforce_ego_copost_ids(conn, "a")}
+    assert post_nodes == expected            # b и c связаны, d исключён
+    assert "post:d" not in post_nodes
+    # малформ-сущности не создают узлов
+    assert all("no-type-skip" not in n["id"] and "broken" not in n["id"] for n in graph["nodes"])
+
+
 # --- conn=None: функция открывает своё соединение (standalone) ---
 
 def test_build_graph_opens_own_connection_when_conn_none(fresh_db):

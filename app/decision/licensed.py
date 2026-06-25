@@ -65,21 +65,44 @@ LICENSED_KZ_BOOKMAKERS = {
 # данные» — реестр конфигурируем без правки кода и без переобучения модели.
 _REGISTRY_PATH = config.DATA_DIR / "licensed_registry.json"
 
+# ПРОИЗВОДИТЕЛЬНОСТЬ: реестр оверрайдов меняется РЕДКО (только через set_operator),
+# но licensed_operators() зовётся в hot-path — на каждый пост И каждую сущность при
+# построении графа (~1300 раз на полный граф). Раньше _load_overrides() читал файл с
+# диска + json.loads НА КАЖДЫЙ вызов. Кэшируем по сигнатуре (mtime_ns, size); пишущая
+# сторона (_save_overrides) инвалидирует кэш. Поведение «аналитик правит файл → видно
+# на следующем вызове» сохранено (сигнатура меняется при записи).
+_overrides_cache: "dict | None" = None
+_overrides_sig = None  # (st_mtime_ns, st_size) | "absent" | None
+
 
 def _load_overrides() -> dict:
+    global _overrides_cache, _overrides_sig
     try:
-        if _REGISTRY_PATH.exists():
-            data = json.loads(_REGISTRY_PATH.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                return data
+        st = _REGISTRY_PATH.stat()
+        sig = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        # файла нет — кэшируем пустой словарь (одна stat-проверка на вызов).
+        if _overrides_sig != "absent":
+            _overrides_cache, _overrides_sig = {}, "absent"
+        return _overrides_cache
+    if sig == _overrides_sig and _overrides_cache is not None:
+        return _overrides_cache
+    try:
+        data = json.loads(_REGISTRY_PATH.read_text(encoding="utf-8"))
+        _overrides_cache = data if isinstance(data, dict) else {}
     except Exception:
-        pass
-    return {}
+        _overrides_cache = {}
+    _overrides_sig = sig
+    return _overrides_cache
 
 
 def _save_overrides(data: dict) -> None:
+    global _overrides_sig
     _REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
     _REGISTRY_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    # инвалидируем кэш — следующий _load_overrides перечитает (корректный registry_state
+    # сразу после записи даже на ФС с грубым разрешением mtime).
+    _overrides_sig = None
 
 # Дисклеймер, который UI показывает рядом с флагом (чтобы не выдавать стаб за истину).
 REGISTRY_DISCLAIMER = (
