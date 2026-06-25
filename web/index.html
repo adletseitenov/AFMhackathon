@@ -1879,6 +1879,118 @@
       </div>
     </section>
 
+    <!-- ═══════════════════════ РЕЕСТР ЛИЦЕНЗИЙ ═══════════════════════
+         Что легально в РК: аналитик помечает операторов лицензированными/нет
+         (напр. 1xBet.kz — легально). GET/POST /api/licensed. -->
+    <section x-show="tab === 'registry'" x-cloak class="max-w-[860px] mx-auto space-y-5">
+      <div class="rounded-card border border-line bg-surface shadow-diffuse p-5">
+        <div class="flex items-start gap-3">
+          <span class="grid place-items-center w-9 h-9 rounded-soft border border-line text-ink shrink-0">
+            <i class="ph ph-seal-check text-[18px]"></i>
+          </span>
+          <div class="min-w-0">
+            <h2 class="text-[15px] font-semibold tracking-tight">Реестр лицензий — что легально в РК</h2>
+            <p class="text-[12px] text-muted mt-1 leading-snug">
+              Не всякий гемблинг = нарушение: букмекеры с лицензией РК работают легально.
+              Помечайте операторов вручную (напр. <b>1xBet.kz</b> — лицензирован). Это
+              меняет флаг «разрешён в РК» и рекомендации, но <b>не</b> занижает риск-скор.
+            </p>
+          </div>
+          <button @click="loadRegistry()" :disabled="registryLoading"
+                  class="lift ml-auto shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-soft border border-line bg-canvas text-[12px] font-medium hover:bg-surface disabled:opacity-50">
+            <i class="ph text-[14px]" :class="registryLoading ? 'ph-circle-notch animate-spin' : 'ph-arrows-clockwise'"></i>
+            Обновить данные
+          </button>
+        </div>
+
+        <!-- тост/ошибка -->
+        <div x-show="registryNote" x-cloak class="mt-3 rounded-soft border border-[#CFE2D0] bg-[#EDF3EC] text-[#346538] text-[12px] px-3 py-2 flex items-center gap-2 reveal">
+          <i class="ph ph-check-circle text-[14px]"></i><span x-text="registryNote"></span>
+        </div>
+        <div x-show="registryError" x-cloak role="alert" class="mt-3 rounded-soft border border-[#F3D5D5] bg-[#FDEBEC] text-[#9F2F2D] text-[12px] px-3 py-2 flex items-start gap-2">
+          <i class="ph ph-warning-circle text-[14px] mt-px shrink-0"></i><span x-text="registryError"></span>
+        </div>
+      </div>
+
+      <!-- добавить оператора вручную («самому выбрать, что легально») -->
+      <div class="rounded-card border border-line bg-surface shadow-diffuse p-5">
+        <div class="flex items-center gap-2 mb-3">
+          <i class="ph ph-plus-circle text-[15px] text-ink"></i>
+          <h3 class="section-h !mb-0">Добавить лицензированного оператора</h3>
+        </div>
+        <div class="flex flex-wrap items-end gap-3">
+          <label class="flex flex-col gap-1">
+            <span class="text-[11px] text-muted">Название оператора</span>
+            <input x-model="newOpName" placeholder="напр. 1xBet"
+                   @keydown.enter="addOperator()"
+                   class="bg-canvas border border-line rounded-soft px-3 py-2 text-[13px] outline-none focus:border-muted w-[200px]" />
+          </label>
+          <label class="flex flex-col gap-1 grow min-w-[220px]">
+            <span class="text-[11px] text-muted">Ключевые слова (через запятую) — по чему искать в тексте</span>
+            <input x-model="newOpKeywords" placeholder="1xbet, 1хбет, 1 x bet"
+                   @keydown.enter="addOperator()"
+                   class="bg-canvas border border-line rounded-soft px-3 py-2 text-[13px] outline-none focus:border-muted w-full" />
+          </label>
+          <button @click="addOperator()" :disabled="registrySaving"
+                  class="lift inline-flex items-center gap-1.5 px-3.5 py-2 rounded-soft bg-ink text-white text-[13px] font-medium hover:opacity-90 disabled:opacity-50">
+            <i class="ph ph-check text-[14px]"></i> Добавить
+          </button>
+        </div>
+        <p class="text-[11px] text-muted mt-2">
+          Источник истины — официальный реестр АФМ/ЕУЦ; добавленное здесь сверяйте с ним.
+        </p>
+      </div>
+
+      <!-- список текущих операторов -->
+      <div class="rounded-card border border-line bg-surface shadow-diffuse p-5">
+        <div class="flex items-center gap-2 mb-3">
+          <i class="ph ph-list-checks text-[15px] text-ink"></i>
+          <h3 class="section-h !mb-0">Лицензированные операторы</h3>
+          <span class="text-[11px] text-muted normal-case font-normal tracking-normal"
+                x-text="registry ? (registry.operators.length + ' в реестре') : ''"></span>
+        </div>
+
+        <div x-show="registryLoading && !registry" class="text-[13px] text-muted py-6 text-center">
+          <i class="ph ph-circle-notch animate-spin text-[16px]"></i> загрузка реестра…
+        </div>
+
+        <ul class="space-y-2" x-show="registry && registry.operators.length">
+          <template x-for="op in (registry ? registry.operators : [])" :key="op.name">
+            <li class="rounded-card border border-line bg-canvas px-4 py-3 flex items-start gap-3">
+              <div class="min-w-0 grow">
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span class="text-[13px] font-semibold tracking-tight" x-text="op.name"></span>
+                  <span class="badge-chip border" style="background:#EDF3EC;color:#346538;border-color:#CFE2D0">лицензирован в РК</span>
+                  <span class="badge-chip border" x-show="op.source === 'added'"
+                        style="background:#F4EEF8;color:#5B3B86;border-color:#E0D2EE">добавлен аналитиком</span>
+                  <span class="badge-chip bg-surface text-muted border border-line" x-show="op.source === 'default'">по умолчанию</span>
+                </div>
+                <p class="text-[12px] text-muted leading-snug mt-1" x-show="op.note" x-text="op.note"></p>
+                <p class="text-[11px] text-muted mt-1" x-show="op.keywords && op.keywords.length">
+                  ключевые слова: <span x-text="(op.keywords || []).join(', ')"></span>
+                </p>
+              </div>
+              <button @click="setOperator(op.name, false)" :disabled="registrySaving === op.name"
+                      class="lift shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-soft border border-line bg-surface text-[12px] font-medium hover:bg-canvas disabled:opacity-50"
+                      title="Пометить нелицензированным (убрать из реестра)">
+                <i class="ph text-[13px]" :class="registrySaving === op.name ? 'ph-circle-notch animate-spin' : 'ph-x'"></i>
+                Не легально
+              </button>
+            </li>
+          </template>
+        </ul>
+
+        <div x-show="registry && !registry.operators.length && !registryLoading"
+             class="text-[13px] text-muted py-6 text-center">
+          Реестр пуст — добавьте оператора выше.
+        </div>
+
+        <p class="mt-3 flex items-start gap-1.5 text-[11px] text-muted" x-show="registry && registry.disclaimer">
+          <i class="ph ph-info text-[12px] mt-px shrink-0"></i><span x-text="registry && registry.disclaimer"></span>
+        </p>
+      </div>
+    </section>
+
   </main>
 </body>
 </html>

@@ -117,6 +117,7 @@ function kozApp() {
       { id: "trends", label: "Тренды", icon: "ph-chart-bar" },
       { id: "watch", label: "Мониторинг", icon: "ph-binoculars" },
       { id: "live", label: "Живая проверка", icon: "ph-shield-check" },
+      { id: "registry", label: "Реестр лицензий", icon: "ph-seal-check" },
     ],
 
     // --- top bar ---
@@ -288,6 +289,16 @@ function kozApp() {
     recSourcesLoaded: false,
     recFocus: "",   // "" = глобально | "kind:value" (category:gambling | brand:1xbet | platform:tiktok)
 
+    // --- реестр лицензий (GET/POST /api/licensed) — что легально в РК ---
+    // {operators:[{name,note,source:'default'|'added',keywords:[]}], disclaimer, compliance_hint}
+    registry: null,
+    registryLoading: false,
+    registryError: "",
+    registryNote: "",            // тост после изменения («1xBet помечен лицензированным»)
+    registrySaving: "",          // имя оператора, по которому идёт сохранение (для спиннера)
+    newOpName: "",               // форма «добавить оператора»: имя
+    newOpKeywords: "",           // ключевые слова (через запятую)
+
     // --- live check (async job: POST /api/analyze -> {job_id}; poll /api/jobs/{id}) ---
     liveUrl: "",
     liveFile: null,
@@ -369,6 +380,7 @@ function kozApp() {
         this.loadWatchlist();      // telegram-список как fallback/совместимость
         this.loadWatchStats();
       }
+      if (id === "registry") this.loadRegistry();
     },
 
     // ===================================================== top bar
@@ -1086,6 +1098,71 @@ function kozApp() {
       } finally {
         this.recsLoading = false;
       }
+    },
+
+    // ===================================================== реестр лицензий
+    // Текущий эффективный реестр (что легально в РК) — GET /api/licensed.
+    async loadRegistry() {
+      if (this.registryLoading) return;
+      this.registryLoading = true;
+      this.registryError = "";
+      try {
+        const r = await fetch("/api/licensed");
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        this.registry = await r.json();
+        this.$nextTick(() => observeReveals());
+      } catch (e) {
+        this.registry = null;
+        this.registryError = "Не удалось загрузить реестр: " + e.message;
+      } finally {
+        this.registryLoading = false;
+      }
+    },
+
+    // Пометить оператора лицензированным/нелицензированным в РК (POST /api/licensed).
+    // licensed=true: «легально в РК»; false: «не легально» (отключить из реестра).
+    async setOperator(name, licensed, keywords, note) {
+      name = String(name || "").trim();
+      if (!name || this.registrySaving) return;
+      this.registrySaving = name;
+      this.registryError = "";
+      this.registryNote = "";
+      try {
+        const body = { name, licensed: !!licensed };
+        if (Array.isArray(keywords) && keywords.length) body.keywords = keywords;
+        if (note) body.note = note;
+        const r = await fetch("/api/licensed", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) {
+          let msg = "HTTP " + r.status;
+          try { const j = await r.json(); if (j && j.detail) msg = j.detail; } catch (_) {}
+          throw new Error(msg);
+        }
+        this.registry = await r.json();
+        this.registryNote = licensed
+          ? `«${name}» помечен лицензированным в РК`
+          : `«${name}» помечен НЕлицензированным`;
+        this.$nextTick(() => observeReveals());
+        setTimeout(() => { this.registryNote = ""; }, 4000);
+      } catch (e) {
+        this.registryError = "Не удалось сохранить: " + e.message;
+      } finally {
+        this.registrySaving = "";
+      }
+    },
+
+    // Добавить нового оператора из формы (имя + ключевые слова через запятую).
+    async addOperator() {
+      const name = String(this.newOpName || "").trim();
+      if (!name) { this.registryError = "Укажите имя оператора"; return; }
+      const kws = String(this.newOpKeywords || "")
+        .split(",").map((s) => s.trim()).filter(Boolean);
+      await this.setOperator(name, true, kws.length ? kws : [name],
+        "Добавлен аналитиком как лицензированный в РК (сверять с реестром АФМ).");
+      if (!this.registryError) { this.newOpName = ""; this.newOpKeywords = ""; }
     },
 
     // Человекочитаемая метка текущего фокуса для бейджа («фокус: …»).
