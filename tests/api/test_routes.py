@@ -778,7 +778,7 @@ def test_monitor_entry_brand_aggregates_and_posts(monitor_client):
     assert d["stats"]["by_category"] == {"gambling": 2}
     assert {row["post"]["id"] for row in d["posts"]} == {"m1", "m2"}
     assert d["posts"][0]["score"]["risk"] == 90  # сортировка по риску убыв.
-    assert d["licensed"] is False  # 1xbet не лицензирован в РК
+    assert d["licensed"] is True  # 1xBet.kz лицензирован в РК -> флаг «разрешён в РК»
 
 
 def test_monitor_entry_empty_target_is_safe(monitor_client):

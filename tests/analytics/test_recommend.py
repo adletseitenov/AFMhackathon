@@ -115,13 +115,13 @@ def test_returns_prioritized_list_with_expected_structure(conn):
 # --- Задача 3c: правило доминирующего бренда -> high про этот бренд ------------
 def test_dominant_brand_rule_fires_high_with_brand_name(conn):
     # один бренд встречается в большом числе постов -> high про блокировку каналов
-    brand = "1xbet"
+    brand = "mostbet"
     for i in range(6):
         pid = f"g{i}"
         _seed_post(conn, pid, "tiktok")
         _seed_score(conn, pid, 90, "gambling", "escalate")
         _seed_extracted(conn, pid, [
-            {"type": "betting_brand", "value": "1xBet", "normalized": brand},
+            {"type": "betting_brand", "value": "Mostbet", "normalized": brand},
         ])
     conn.commit()
 

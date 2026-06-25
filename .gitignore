@@ -49,6 +49,8 @@ Thumbs.db
 data/watchlist.json
 data/watchlist_stats.json
 data/watchlist_entry_stats.json
+# аналитик-редактируемый реестр лицензий (оверрайды поверх дефолтов)
+data/licensed_registry.json
 
 # runtime server logs
 data/server.log

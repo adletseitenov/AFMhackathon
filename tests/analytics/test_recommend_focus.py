@@ -110,31 +110,31 @@ def test_focus_category_pyramid_dict_form_equivalent(conn):
     assert [r["title"] for r in str_recs] == [r["title"] for r in dict_recs]
 
 
-# --- 3. focus="brand:1xbet" (нелицензированный) -> блок/takedown про 1xbet -----
+# --- 3. focus="brand:mostbet" (нелицензированный) -> блок/takedown про mostbet ---
 def test_focus_brand_unlicensed_block_takedown(conn):
     for i in range(4):
         pid = f"x{i}"
         _seed_post(conn, pid, "tiktok")
         _seed_score(conn, pid, 92, "gambling", "escalate")
         _seed_extracted(conn, pid, [
-            {"type": "betting_brand", "value": "1xBet", "normalized": "1xbet"},
+            {"type": "betting_brand", "value": "Mostbet", "normalized": "mostbet"},
         ])
-    # шум: посты с другим брендом (mostbet), которых НЕ должно быть в срезе 1xbet.
+    # шум: посты с другим брендом (vavada), которых НЕ должно быть в срезе mostbet.
     for i in range(3):
         pid = f"m{i}"
         _seed_post(conn, pid, "telegram")
         _seed_score(conn, pid, 88, "gambling", "escalate")
         _seed_extracted(conn, pid, [
-            {"type": "betting_brand", "value": "Mostbet", "normalized": "mostbet"},
+            {"type": "betting_brand", "value": "Vavada", "normalized": "vavada"},
         ])
     conn.commit()
 
-    recs = build_recommendations(conn, focus="brand:1xbet")
+    recs = build_recommendations(conn, focus="brand:mostbet")
     _assert_well_formed(recs)
     assert any(
-        "1xbet" in (r["title"] + r["rationale"] + r["action"]).lower()
+        "mostbet" in (r["title"] + r["rationale"] + r["action"]).lower()
         for r in recs
-    ), "ожидались рекомендации про бренд 1xbet"
+    ), "ожидались рекомендации про бренд mostbet"
     # high блок/takedown присутствует.
     hard = [
         r for r in recs
@@ -142,11 +142,11 @@ def test_focus_brand_unlicensed_block_takedown(conn):
         and ("блокир" in r["action"].lower() or "takedown" in r["action"].lower())
     ]
     assert hard, "для нелицензированного бренда ожидался high блок/takedown"
-    # mostbet-посты не протекают в срез 1xbet.
+    # vavada-посты не протекают в срез mostbet.
     assert not any(
-        "mostbet" in (r["title"] + r["rationale"] + r["action"]).lower()
+        "vavada" in (r["title"] + r["rationale"] + r["action"]).lower()
         for r in recs
-    ), "посты другого бренда не должны попадать в срез 1xbet"
+    ), "посты другого бренда не должны попадать в срез mostbet"
 
 
 # --- 4. focus="brand:olimpbet" (лицензированный) -> ad-compliance, medium ------

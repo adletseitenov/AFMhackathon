@@ -41,6 +41,8 @@ from app.decision.licensed import (
     COMPLIANCE_HINT,
     REGISTRY_DISCLAIMER,
     licensed_operators,
+    registry_state,
+    set_operator,
 )
 from app.graph.build import build_ego_graph
 from app.models import Extracted, FeatureHit, Post, Score
@@ -195,6 +197,34 @@ _ACTION_ALIASES = {
     "clean": "auto_clear",
     "auto_clear": "auto_clear",
 }
+
+
+# --------------------------------------------------------------------------- #
+# Реестр лицензированных в РК операторов: просмотр + аналитик-редактирование
+# («обновить данные»: вручную пометить, что легально в РК, напр. 1xBet).
+# --------------------------------------------------------------------------- #
+@router.get("/api/licensed")
+def api_licensed_get():
+    """Текущий эффективный реестр лицензированных операторов + дисклеймер."""
+    return registry_state()
+
+
+@router.post("/api/licensed")
+async def api_licensed_set(request: Request):
+    """Аналитик помечает оператора: {name, licensed: bool, keywords?: [..], note?: str}.
+    Персистится в data/licensed_registry.json; возвращает обновлённый реестр."""
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="ожидается JSON-тело")
+    if not isinstance(payload, dict) or not str(payload.get("name") or "").strip():
+        raise HTTPException(status_code=400, detail="поле 'name' обязательно")
+    licensed = payload.get("licensed")
+    if not isinstance(licensed, bool):
+        raise HTTPException(status_code=400, detail="поле 'licensed' должно быть булевым (true/false)")
+    kws = payload.get("keywords") if isinstance(payload.get("keywords"), list) else None
+    return set_operator(str(payload["name"]).strip(), licensed,
+                        keywords=kws, note=str(payload.get("note") or ""))
 
 
 @router.get("/api/feed")

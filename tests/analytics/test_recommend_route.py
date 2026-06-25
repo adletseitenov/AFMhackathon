@@ -45,7 +45,7 @@ def client(tmp_path, monkeypatch):
     conn = db.connect()
     db.init_db(conn)
     for i in range(6):
-        _add(conn, f"p{i}", "tiktok", 92, "gambling", "escalate", brand="1xBet")
+        _add(conn, f"p{i}", "tiktok", 92, "gambling", "escalate", brand="Mostbet")
     conn.close()
     with TestClient(app) as c:
         yield c
@@ -64,10 +64,10 @@ def test_recommendations_endpoint_shape(client):
     for r in recs:
         assert {"title", "rationale", "action", "priority", "evidence"}.issubset(r)
         assert r["priority"] in {"high", "medium", "low"}
-    # доминирующий бренд 1xbet -> есть high-рекомендация, упоминающая бренд
+    # доминирующий бренд mostbet -> есть high-рекомендация, упоминающая бренд
     assert any(
         r["priority"] == "high"
-        and "1xbet" in (r["title"] + r["rationale"] + r["action"]).lower()
+        and "mostbet" in (r["title"] + r["rationale"] + r["action"]).lower()
         for r in recs
     )
 
@@ -85,15 +85,15 @@ def test_recommendations_endpoint_empty_db_no_crash(tmp_path, monkeypatch):
 
 
 def test_recommendations_focus_param(client):
-    resp = client.get("/api/recommendations", params={"focus": "brand:1xbet"})
+    resp = client.get("/api/recommendations", params={"focus": "brand:mostbet"})
     assert resp.status_code == 200
     data = resp.json()
     assert set(data.keys()) >= {"stats", "recommendations"}
     recs = data["recommendations"]
     assert isinstance(recs, list) and recs, "фокус по бренду -> непустые рекомендации"
     top = recs[0]
-    assert "1xbet" in (top["title"] + top["rationale"] + top["action"]).lower(), (
-        "топ-рекомендация при focus=brand:1xbet должна упоминать 1xbet"
+    assert "mostbet" in (top["title"] + top["rationale"] + top["action"]).lower(), (
+        "топ-рекомендация при focus=brand:mostbet должна упоминать mostbet"
     )
 
 
@@ -106,9 +106,9 @@ def test_recommendations_focus_category(client):
     blob = " ".join(
         (r["title"] + r["rationale"] + r["action"]) for r in recs
     ).lower()
-    # gambling-ориентированность: упоминание гемблинга/казино/букмекера/бренда 1xbet.
+    # gambling-ориентированность: упоминание гемблинга/казино/букмекера/бренда mostbet.
     assert any(
-        kw in blob for kw in ("гемблинг", "казино", "букмекер", "1xbet", "ставк")
+        kw in blob for kw in ("гемблинг", "казино", "букмекер", "mostbet", "ставк")
     ), "рекомендации при focus=category:gambling должны быть про гемблинг"
 
 
@@ -127,7 +127,7 @@ def test_recommendations_sources_shape(client):
     for key in ("categories", "brands", "platforms"):
         assert isinstance(data[key], list), f"{key} должно быть списком"
     brands = data["brands"]
-    assert brands, "на засеянной фикстуре brands непуст (доминирует 1xBet)"
+    assert brands, "на засеянной фикстуре brands непуст (доминирует Mostbet)"
     for b in brands:
         assert {"id", "label", "count"}.issubset(b)
         assert isinstance(b["licensed"], bool), "каждый brand несёт булев licensed"
@@ -166,19 +166,19 @@ def test_hotspots_shape(client):
     for key in ("top_problems", "top_operators", "top_telegram", "top_youtube"):
         assert isinstance(data[key], list), f"{key} должно быть списком"
     assert isinstance(data["recommendations"], list), "recommendations — список"
-    # на засеянных gambling/1xBet данных топ-проблемы непусты (есть gambling).
+    # на засеянных gambling/Mostbet данных топ-проблемы непусты (есть gambling).
     problems = data["top_problems"]
     assert problems, "top_problems непуст (gambling в засеянной фикстуре)"
     assert any(
         (p.get("category") or "").lower() == "gambling" for p in problems
     ), "gambling среди топ-проблем"
-    # топ-конторы непусты и содержат нелицензированный 1xbet.
+    # топ-конторы непусты и содержат нелицензированный mostbet.
     operators = data["top_operators"]
-    assert operators, "top_operators непуст (доминирует 1xBet)"
+    assert operators, "top_operators непуст (доминирует Mostbet)"
     assert any(
-        "1xbet" in (op.get("brand") or "").lower() and op.get("licensed") is False
+        "mostbet" in (op.get("brand") or "").lower() and op.get("licensed") is False
         for op in operators
-    ), "1xbet среди контор с licensed=False"
+    ), "mostbet среди контор с licensed=False"
     assert data["recommendations"], "решения (recommendations) непусты"
 
 

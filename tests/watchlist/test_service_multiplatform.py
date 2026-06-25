@@ -291,8 +291,9 @@ def test_operator_dispatch_youtube_and_tiktok(tmp_data, svc, monkeypatch):
 
 
 def test_operator_licensed_flag_unlicensed(tmp_data, svc, monkeypatch):
-    """1xbet — нелицензированный оператор: licensed=False в record_entry_scan."""
-    tmp_data.add_entry("1xbet", "operator")
+    """mostbet — нелицензированный оператор: licensed=False в record_entry_scan.
+    (1xBet перенесён в лицензированные — БК 1xBet.kz имеет лицензию РК.)"""
+    tmp_data.add_entry("mostbet", "operator")
 
     monkeypatch.setattr(svc.youtube_mod, "search_youtube", lambda q, limit=5: [])
     monkeypatch.setattr(svc.fetch_mod, "list_account_posts", lambda u, limit=12: [])
