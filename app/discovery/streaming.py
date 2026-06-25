@@ -384,7 +384,7 @@ def search_twitch_live(categories=None, per_category: int = 6, max_live: int = 6
             break
         query = (
             'query{game(name:"%s"){streams(first:%d){edges{node{title '
-            'viewersCount broadcaster{login displayName}}}}}}'
+            'language viewersCount broadcaster{login displayName}}}}}}'
             % (cat, int(per_category))
         )
         try:
@@ -417,5 +417,7 @@ def search_twitch_live(categories=None, per_category: int = 6, max_live: int = 6
                 "live": True,
                 # стрим найден в ГЕМБЛИНГ-категории Twitch -> контекст для скоринга
                 "category_context": f"{cat} казино слоты ставки гемблинг стрим",
+                # язык стрима (для страновой привязки: ru/kk -> Казахстан)
+                "language": str(node.get("language") or "").lower(),
             })
     return out

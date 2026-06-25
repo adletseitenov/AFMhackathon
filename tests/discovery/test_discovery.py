@@ -700,3 +700,48 @@ def test_discover_twitch_search_ingests_live_streams(tmp_path, monkeypatch):
     assert live_samples[0]["url"] == "https://www.twitch.tv/hunterowner"
     assert any(p.url == "https://www.twitch.tv/hunterowner" and p.live
                for p in db.get_revealed_posts(conn))
+
+
+def test_live_marks_no_streamers_from_search_country(tmp_path, monkeypatch):
+    """Страновая привязка эфиров: ищем по Казахстану, но Twitch отдаёт только
+    эфир на английском -> честная пометка, что стримеров из страны не найдено."""
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "tw_country.db")
+    conn = db.connect(); db.init_db(conn)
+    monkeypatch.setattr(discovery, "score_post", _fake_score)
+    monkeypatch.setattr(discovery, "_TWITCH_SEED_STREAMERS", ["seed_off"])
+    monkeypatch.setattr(streaming, "fetch_live", lambda platform, account: None)
+    monkeypatch.setattr(streaming, "search_kick_live", lambda *a, **k: [])
+    en_stream = {
+        "url": "https://www.twitch.tv/globalcasino", "title": "casino wager rewards",
+        "description": "casino wager rewards", "author_handle": "globalcasino",
+        "thumb_url": "", "view_count": 1500, "live": True, "language": "en",
+    }
+    monkeypatch.setattr(streaming, "search_twitch_live", lambda *a, **k: [en_stream])
+
+    res = discovery.discover(conn, per_query=1, search_yt=_fake_yt, with_telegram=False,
+                             platform="twitch", content_type="live", country="kz")
+    assert res["live_added"] == 1
+    assert "live_country_note" in res
+    assert "не найден" in res["live_country_note"].lower()
+    assert res.get("note") == res["live_country_note"]
+
+
+def test_live_no_country_note_when_streamer_from_search_country(tmp_path, monkeypatch):
+    """Если есть эфир на языке выбранной страны (ru/kk для КЗ) — пометки нет."""
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "tw_country2.db")
+    conn = db.connect(); db.init_db(conn)
+    monkeypatch.setattr(discovery, "score_post", _fake_score)
+    monkeypatch.setattr(discovery, "_TWITCH_SEED_STREAMERS", ["seed_off"])
+    monkeypatch.setattr(streaming, "fetch_live", lambda platform, account: None)
+    monkeypatch.setattr(streaming, "search_kick_live", lambda *a, **k: [])
+    ru_stream = {
+        "url": "https://www.twitch.tv/kzcasino", "title": "казино занос слоты",
+        "description": "казино занос слоты", "author_handle": "kzcasino",
+        "thumb_url": "", "view_count": 900, "live": True, "language": "ru",
+    }
+    monkeypatch.setattr(streaming, "search_twitch_live", lambda *a, **k: [ru_stream])
+
+    res = discovery.discover(conn, per_query=1, search_yt=_fake_yt, with_telegram=False,
+                             platform="twitch", content_type="live", country="kz")
+    assert res["live_added"] == 1
+    assert "live_country_note" not in res

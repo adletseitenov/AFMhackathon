@@ -33,6 +33,11 @@ _STREAMING_PLATFORMS = {"twitch", "kick"}
 # streaming_mod.fetch_live(platform, account) — ингестим только тех, кто СЕЙЧАС в эфире.
 _LIVE_PLATFORMS = {"tiktok", "twitch", "kick", "instagram"}
 
+# Языки, по которым эфир считается «из этой страны». Прямые казино-эфиры площадки
+# отдают ГЛОБАЛЬНО (странового фильтра для live нет) — по языку стрима честно метим,
+# найден ли стример из выбранной страны или это мировой эфир.
+_COUNTRY_LANGS = {"kz": {"ru", "kk"}, "ru": {"ru"}}
+
 # Сид-аккаунты/стримеры — ЕДИНЫЙ источник истины: app/discovery/catalog.py.
 # Дублируем в module-level имена, чтобы остались монкипатч-семы существующих тестов
 # (tests monkeypatch d._TIKTOK_SEED_ACCOUNTS / d._KICK_SEED_STREAMERS / ...).
@@ -558,6 +563,7 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
     #     проверяем эфир сид-аккаунтов через streaming_mod.fetch_live, ингестим
     #     только тех, кто СЕЙЧАС в эфире (пост помечен флагом live).
     fresh_live: list = []
+    live_langs: list = []  # языки найденных live-стримов (для страновой привязки)
     live_added = 0
     if do_live:
         for lp in live_platforms:
@@ -595,6 +601,7 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
             try:
                 search_tw = getattr(streaming_mod, "search_twitch_live", None)
                 for info in (search_tw() if search_tw else []) or []:
+                    live_langs.append(str((info or {}).get("language") or "").lower())
                     r = _ingest_one_live(
                         conn, "twitch", info, (info or {}).get("author_handle", ""),
                         seen_urls, by_category, samples, fresh_live, min_risk, max_risk,
@@ -604,6 +611,21 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
                     flagged += r["flagged"]
             except Exception:
                 pass
+
+    # СТРАНОВАЯ ПРИВЯЗКА эфиров: live ищется ГЛОБАЛЬНО по гемблинг-категориям площадок
+    # (страновой фильтр для эфиров они не дают). Если выбрана конкретная страна, но
+    # среди найденных эфиров нет ни одного на её языке — честно помечаем, что стримеров
+    # ИЗ этой страны не найдено (показаны мировые).
+    live_country_note = ""
+    _country_key = (country or "").lower().strip()
+    if want_live and live_added > 0 and _country_key in _COUNTRY_LANGS:
+        want_langs = _COUNTRY_LANGS[_country_key]
+        if not any(lg in want_langs for lg in live_langs if lg):
+            live_country_note = (
+                "Прямых казино-эфиров из выбранной страны не найдено — площадки не дают "
+                "страновой фильтр для live. Показаны МИРОВЫЕ эфиры (язык EN и др.): "
+                "стримеров из этой страны среди них нет."
+            )
 
     # 2) Telegram — курируемые казино-каналы (надёжно) + DDG best-effort + СНЕЖНЫЙ КОМ
     #    по t.me-ссылкам в сообщениях: находит НОВЫЕ каналы И ЧАТЫ (не только каналы).
@@ -709,6 +731,12 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
     if not note and danger_active and total_added == 0:
         note = (f"По выбранному уровню опасности (риск {min_risk}–{max_risk}) новых находок нет. "
                 "Контент вне этого диапазона не показан — снимите фильтр опасности, чтобы увидеть всё.")
+    # Страновая привязка эфиров: эфиры есть, но ни одного из выбранной страны — честно
+    # помечаем (приоритетнее danger-ноты; не затирает «никто не в эфире»).
+    if live_country_note:
+        result["live_country_note"] = live_country_note
+        if not note:
+            note = live_country_note
     if note:
         result["note"] = note
     return result
