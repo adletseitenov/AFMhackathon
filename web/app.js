@@ -1224,6 +1224,29 @@ function kozApp() {
         : [];
     },
 
+    // Сводка ИСТОЧНИКОВ улик по модальностям для открытого кейса: какая модальность
+    // что дала (включая пустые — чтобы было видно «речи нет» vs «разбор не запускался»).
+    // Подпись (текст) / Речь→текст (Whisper) / Текст с экрана (OCR) / Визуал (CLIP).
+    get modalitySources() {
+      const d = this.detail;
+      if (!d) return [];
+      const e = d.extracted || {};
+      const cap = ((d.post && d.post.caption) || e.caption || "").trim();
+      const vc = Array.isArray(e.visual_concepts) ? e.visual_concepts : [];
+      const tr = (e.transcript || "").trim();
+      const ocr = (e.ocr_text || "").trim();
+      return [
+        { key: "caption", label: "Подпись", icon: "ph-textbox", color: "#787774",
+          present: !!cap, note: "текст поста" },
+        { key: "speech", label: "Речь → текст", icon: "ph-waveform", color: "#1F6C9F",
+          present: !!tr, note: "Whisper (речь из видео)" },
+        { key: "screen", label: "Текст с экрана", icon: "ph-text-aa", color: "#956400",
+          present: !!ocr, note: "OCR (текст на кадрах)" },
+        { key: "visual", label: "Визуал", icon: "ph-eye", color: "#346538",
+          present: vc.length > 0, note: vc.length ? (vc.length + " маркер(ов), CLIP") : "CLIP (образы в кадре)" },
+      ];
+    },
+
     // Правовое основание кейса (GET /api/post -> legal_basis): статьи закона РК
     // + наказание + законный путь мер. {category_ru, articles:[{code,article,
     // title,summary,punishment}], enforcement:[str], disclaimer}. Пусто -> null.

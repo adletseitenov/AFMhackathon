@@ -1115,6 +1115,22 @@
                   <span class="text-[11px] text-muted normal-case font-normal tracking-normal">разбор по модальностям</span>
                 </div>
 
+                <!-- сводка ИСТОЧНИКОВ: какая модальность дала улику (✓), а какая пуста (—).
+                     Видно «речи нет» vs «разбор не запускался»; источник каждой улики. -->
+                <div class="flex flex-wrap gap-1.5 mb-3">
+                  <template x-for="m in modalitySources" :key="m.key">
+                    <span class="badge-chip border normal-case tracking-normal"
+                          :title="m.note"
+                          :style="m.present
+                            ? ('background:#FFFFFF;border-color:' + m.color + '55;color:' + m.color)
+                            : 'background:#F7F7F5;border-color:#EAEAEA;color:#B5B5B2'">
+                      <i class="ph text-[12px]" :class="m.icon"></i>
+                      <span x-text="m.label" class="ml-1"></span>
+                      <span class="ml-1 font-mono" x-text="m.present ? '✓' : '—'"></span>
+                    </span>
+                  </template>
+                </div>
+
                 <!-- empty-state: title-only post, no deep analysis ran -->
                 <div class="evidence-modal-empty"
                      x-show="!(detail.extracted && (detail.extracted.transcript || detail.extracted.ocr_text || (detail.extracted.visual_concepts && detail.extracted.visual_concepts.length)))">
