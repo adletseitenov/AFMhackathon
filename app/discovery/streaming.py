@@ -350,3 +350,68 @@ def search_kick_live(terms=None, per_term: int = 5, max_live: int = 6) -> list:
             if info:
                 out.append(info)
     return out
+
+
+# Публичный web Client-ID Twitch (тот же, что использует twitch.tv) — открытый GraphQL
+# без авторизации пользователя. Гемблинг-категории Twitch: «Slots», «Virtual Casino».
+_TWITCH_GQL = "https://gql.twitch.tv/gql"
+_TWITCH_WEB_CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
+_TWITCH_LIVE_CATEGORIES = ("Slots", "Virtual Casino")
+
+
+def search_twitch_live(categories=None, per_category: int = 6, max_live: int = 6) -> list:
+    """Найти Twitch-каналы, которые СЕЙЧАС в ЭФИРЕ в гемблинг-категориях (Slots /
+    Virtual Casino), через публичный Twitch GraphQL (web Client-ID, без авторизации).
+
+    Зачем: проверка фиксированного списка сид-стримеров часто даёт 0 (никто из них не
+    в эфире прямо сейчас). Запрос категории отдаёт тех, кто СЕЙЧАС стримит слоты/казино.
+
+    РОБАСТНА: [] при любой ошибке. Возврат — нормализованные dict(live=True), как у
+    fetch_live: {url,title,description,author_handle,thumb_url,view_count,live}."""
+    import json as _json
+
+    categories = categories or _TWITCH_LIVE_CATEGORIES
+    out: list = []
+    seen: set = set()
+    try:
+        from curl_cffi import requests as creq
+    except Exception:
+        return []
+    for cat in categories:
+        if len(out) >= max_live:
+            break
+        query = (
+            'query{game(name:"%s"){streams(first:%d){edges{node{title '
+            'viewersCount broadcaster{login displayName}}}}}}'
+            % (cat, int(per_category))
+        )
+        try:
+            resp = creq.post(
+                _TWITCH_GQL,
+                headers={"Client-Id": _TWITCH_WEB_CLIENT_ID, "Content-Type": "application/json"},
+                data=_json.dumps({"query": query}), impersonate="chrome", timeout=12,
+            )
+            data = resp.json()
+            edges = (((data.get("data") or {}).get("game") or {}).get("streams") or {}).get("edges") or []
+        except Exception:
+            continue
+        for e in edges:
+            if len(out) >= max_live:
+                break
+            node = (e or {}).get("node") or {}
+            b = node.get("broadcaster") or {}
+            login = str(b.get("login") or "").strip().lstrip("@")
+            if not login or login in seen:
+                continue
+            seen.add(login)
+            title = node.get("title") or ""
+            out.append({
+                "url": f"https://www.twitch.tv/{login}",
+                "title": title,
+                "description": title,
+                "author_handle": login,
+                "thumb_url": "",
+                "view_count": _int_or_zero(node.get("viewersCount")),
+                "live": True,
+            })
+    return out

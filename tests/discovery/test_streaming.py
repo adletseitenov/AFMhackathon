@@ -582,3 +582,51 @@ def test_fetch_live_instagram_best_effort_none(monkeypatch):
 def test_fetch_live_unknown_platform_returns_none():
     """Неизвестная площадка -> None (не падает)."""
     assert streaming.fetch_live("myspace", "anyone") is None
+
+
+def test_search_twitch_live_parses_gql_streams(monkeypatch):
+    """search_twitch_live: публичный Twitch GraphQL отдаёт live-стримы категории ->
+    нормализованные dict(live=True). curl_cffi.requests.post замокан."""
+    import sys
+    import types
+
+    class _Resp:
+        def json(self):
+            return {"data": {"game": {"streams": {"edges": [
+                {"node": {"title": "BONUS HUNT !stake", "viewersCount": 1500,
+                          "broadcaster": {"login": "casinoguy", "displayName": "CasinoGuy"}}},
+                {"node": {"title": "slots night", "viewersCount": 80,
+                          "broadcaster": {"login": "slotsdude", "displayName": "SlotsDude"}}},
+            ]}}}}
+
+    fake = types.ModuleType("curl_cffi")
+    fake_requests = types.ModuleType("curl_cffi.requests")
+    fake_requests.post = lambda url, **k: _Resp()
+    fake.requests = fake_requests
+    monkeypatch.setitem(sys.modules, "curl_cffi", fake)
+    monkeypatch.setitem(sys.modules, "curl_cffi.requests", fake_requests)
+
+    out = streaming.search_twitch_live(categories=["Slots"], per_category=5, max_live=6)
+    assert len(out) == 2
+    s = out[0]
+    assert s["url"] == "https://www.twitch.tv/casinoguy"
+    assert s["author_handle"] == "casinoguy"
+    assert s["title"] == "BONUS HUNT !stake"
+    assert s["view_count"] == 1500
+    assert s["live"] is True
+
+
+def test_search_twitch_live_empty_on_failure(monkeypatch):
+    import sys
+    import types
+
+    def _boom(*a, **k):
+        raise RuntimeError("net down")
+
+    fake = types.ModuleType("curl_cffi")
+    fake_requests = types.ModuleType("curl_cffi.requests")
+    fake_requests.post = _boom
+    fake.requests = fake_requests
+    monkeypatch.setitem(sys.modules, "curl_cffi", fake)
+    monkeypatch.setitem(sys.modules, "curl_cffi.requests", fake_requests)
+    assert streaming.search_twitch_live() == []

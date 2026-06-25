@@ -520,6 +520,8 @@ def test_discover_live_ingests_only_in_air_with_flag(tmp_path, monkeypatch):
                 "author_handle": account, "live": False}  # не в эфире -> пропуск
 
     monkeypatch.setattr(streaming, "fetch_live", _fake_live)
+    # динамический поиск живых Twitch-эфиров пуст в этом тесте (проверяем только сиды)
+    monkeypatch.setattr(streaming, "search_twitch_live", lambda *a, **k: [])
 
     res = discovery.discover(conn, per_query=1, search_yt=_fake_yt,
                              with_telegram=False, platform="twitch",
@@ -673,3 +675,28 @@ def test_discover_kick_search_ingests_live_streams(tmp_path, monkeypatch):
     assert live_samples[0]["url"] == "https://kick.com/casinoexile"
     revealed = db.get_revealed_posts(conn)
     assert any(p.url == "https://kick.com/casinoexile" and p.live for p in revealed)
+
+
+def test_discover_twitch_search_ingests_live_streams(tmp_path, monkeypatch):
+    """Динамический поиск живых Twitch-эфиров: сид-стримеры офлайн, но
+    search_twitch_live находит живой казино-стрим -> ингест с флагом live."""
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "twlive.db")
+    conn = db.connect(); db.init_db(conn)
+    monkeypatch.setattr(discovery, "score_post", _fake_score)
+    monkeypatch.setattr(discovery, "_TWITCH_SEED_STREAMERS", ["seed_off"])
+    monkeypatch.setattr(streaming, "fetch_live", lambda platform, account: None)
+    live_info = {
+        "url": "https://www.twitch.tv/hunterowner", "title": "casino wager rewards",
+        "description": "casino wager rewards", "author_handle": "hunterowner",
+        "thumb_url": "", "view_count": 1868, "live": True,
+    }
+    monkeypatch.setattr(streaming, "search_twitch_live", lambda *a, **k: [live_info])
+
+    res = discovery.discover(conn, per_query=1, search_yt=_fake_yt,
+                             with_telegram=False, platform="twitch", content_type="live")
+    assert res["live_added"] == 1
+    live_samples = [s for s in res["samples"] if s.get("live")]
+    assert len(live_samples) == 1
+    assert live_samples[0]["url"] == "https://www.twitch.tv/hunterowner"
+    assert any(p.url == "https://www.twitch.tv/hunterowner" and p.live
+               for p in db.get_revealed_posts(conn))

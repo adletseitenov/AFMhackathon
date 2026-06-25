@@ -582,6 +582,23 @@ def discover(conn, queries=None, per_query: int = 4, report=None,
                     flagged += r["flagged"]
             except Exception:
                 pass
+        # ДИНАМИЧЕСКИЙ поиск ЖИВЫХ Twitch-эфиров в гемблинг-категориях (Slots/Virtual
+        # Casino) через публичный Twitch GraphQL — сид-стримеры часто офлайн. Best-effort.
+        if "twitch" in live_platforms:
+            if report:
+                report("twitch: поиск живых казино-эфиров", 92)
+            try:
+                search_tw = getattr(streaming_mod, "search_twitch_live", None)
+                for info in (search_tw() if search_tw else []) or []:
+                    r = _ingest_one_live(
+                        conn, "twitch", info, (info or {}).get("author_handle", ""),
+                        seen_urls, by_category, samples, fresh_live, min_risk, max_risk,
+                    )
+                    live_added += r["added"]
+                    platform_added += r["added"]
+                    flagged += r["flagged"]
+            except Exception:
+                pass
 
     # 2) Telegram — курируемые казино-каналы (надёжно) + DDG best-effort + СНЕЖНЫЙ КОМ
     #    по t.me-ссылкам в сообщениях: находит НОВЫЕ каналы И ЧАТЫ (не только каналы).
