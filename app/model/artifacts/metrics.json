@@ -7,54 +7,54 @@
   ],
   "per_class": {
     "gambling": {
-      "precision": 0.8739,
-      "recall": 0.97,
-      "f1": 0.9194
+      "precision": 0.875,
+      "recall": 0.901,
+      "f1": 0.8878
     },
     "pyramid": {
-      "precision": 0.9259,
-      "recall": 0.9709,
-      "f1": 0.9479
+      "precision": 0.9174,
+      "recall": 0.9346,
+      "f1": 0.9259
     },
     "fraud": {
-      "precision": 0.904,
-      "recall": 0.9113,
-      "f1": 0.9076
+      "precision": 0.9191,
+      "recall": 0.9191,
+      "f1": 0.9191
     },
     "clean": {
-      "precision": 0.944,
-      "recall": 0.831,
-      "f1": 0.8839
+      "precision": 0.8897,
+      "recall": 0.86,
+      "f1": 0.8746
     }
   },
   "confusion_matrix": [
     [
-      97,
+      91,
       0,
-      3,
-      0
+      6,
+      4
     ],
     [
       0,
       100,
       0,
-      3
+      7
     ],
     [
-      7,
+      6,
       0,
-      113,
-      4
+      125,
+      5
     ],
     [
       7,
-      8,
       9,
-      118
+      5,
+      129
     ]
   ],
-  "macro_f1": 0.9147,
-  "n_train": 1406,
-  "n_test": 469,
+  "macro_f1": 0.9019,
+  "n_train": 1479,
+  "n_test": 494,
   "model": "FeatureUnion(tfidf-word(1,2)+tfidf-char_wb(3,5)+handcrafted) -> LogisticRegression"
 }
